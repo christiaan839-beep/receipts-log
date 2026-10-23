@@ -6,13 +6,17 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_call:
 permissions:
-  contents: read
+  contents: read # check out the code
+# Keyed on the calling workflow too, so a tag push's own run never cancels
+# the run that release.yml makes; only pull request runs are superseded.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
+    name: Test (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -34,6 +38,7 @@ jobs:
       - run: make build
 
   interop:
+    name: Interop with verifiable-receipts
     runs-on: ubuntu-latest
     env:
       # The verifiable-receipts commit the cross-checks run against.
@@ -61,6 +66,7 @@ jobs:
       - run: make interop VERIFIABLE_RECEIPTS_DIR="$GITHUB_WORKSPACE/verifiable-receipts"
 
   docker:
+    name: Container image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
