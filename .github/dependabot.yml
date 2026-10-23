@@ -18,6 +18,12 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+  - package-ecosystem: pip
+    directory: /.github/tools/python-interop
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
   - package-ecosystem: docker
     directory: /
     schedule:
