@@ -41,20 +41,20 @@ func New(baseURL string, hc *http.Client) (*Client, error) {
 	return &Client{base: u, http: hc}, nil
 }
 
-// StatusError is a response whose status is neither 200 nor 201.
+// StatusError is a response whose status is neither 200 nor 201. Its
+// message names the method, the route and the status only; the body is
+// left to the caller.
 type StatusError struct {
-	Method, Path string
-	Status       int
+	// Method and Route are the request's method and the route the
+	// caller passed (such as "/v1/sth"), not the URL sent.
+	Method, Route string
+	Status        int
 	// Body is the response body, at most 1 MiB.
 	Body []byte
 }
 
 func (e *StatusError) Error() string {
-	msg := strings.TrimSpace(string(e.Body))
-	if len(msg) > 200 {
-		msg = msg[:200]
-	}
-	return fmt.Sprintf("%s %s: HTTP %d %s", e.Method, e.Path, e.Status, msg)
+	return fmt.Sprintf("%s %q: HTTP %d", e.Method, e.Route, e.Status)
 }
 
 func (c *Client) url(path string, q url.Values) string {
@@ -64,44 +64,53 @@ func (c *Client) url(path string, q url.Values) string {
 	return u.String()
 }
 
-// Get sends GET path?q and decodes the JSON response into out.
-func (c *Client) Get(ctx context.Context, path string, q url.Values, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(path, q), nil)
+// Get sends GET route?q and decodes the JSON response into out.
+func (c *Client) Get(ctx context.Context, route string, q url.Values, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(route, q), nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("GET %q: %w", route, err)
 	}
-	return c.do(req, out)
+	return c.do(req, route, out)
 }
 
-// Post sends body as JSON to path and decodes the JSON response into out.
-func (c *Client) Post(ctx context.Context, path string, body []byte, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(path, nil), bytes.NewReader(body))
+// Post sends body as JSON to route and decodes the JSON response into
+// out.
+func (c *Client) Post(ctx context.Context, route string, body []byte, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(route, nil), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("POST %q: %w", route, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return c.do(req, out)
+	return c.do(req, route, out)
 }
 
-func (c *Client) do(req *http.Request, out any) error {
+// do sends req and decodes its response. Every error it returns names
+// the request by its method and route, never by the URL it was sent to.
+func (c *Client) do(req *http.Request, route string, out any) error {
+	method := req.Method
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		// A *url.Error prints the whole URL; keep only its cause.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return fmt.Errorf("%s %q: %w", method, route, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %q: reading the response: %w", method, route, err)
 	}
 	if len(data) > maxResponse {
-		return fmt.Errorf("%s %s: response larger than %d bytes", req.Method, req.URL.Path, maxResponse)
+		return fmt.Errorf("%s %q: response larger than %d bytes", method, route, maxResponse)
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return &StatusError{Method: req.Method, Path: req.URL.Path, Status: resp.StatusCode, Body: data}
+		return &StatusError{Method: method, Route: route, Status: resp.StatusCode, Body: data}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("%s %s: malformed response: %v", req.Method, req.URL.Path, err)
+		return fmt.Errorf("%s %q: malformed response JSON", method, route)
 	}
 	return nil
 }
