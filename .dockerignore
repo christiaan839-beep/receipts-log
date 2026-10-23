@@ -1,0 +1,9 @@
+.git
+.github
+interop
+testdata
+**/*_test.go
+*.pem
+*.key
+data/
+dist/

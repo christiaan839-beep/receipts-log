@@ -1,0 +1,53 @@
+// Command go-vaos runs the verifiable-receipts Go verifier
+// (packages/verifiable-receipts-go, wired in by a replace directive the
+// interop test writes) over a JSON job read from stdin.
+//
+// Job: {"inclusion": [{leafHashHex, leafIndex, treeSize, auditPath, rootHashHex}],
+//       "receipts": [<receipt JSON>], "issuerPublicKeyPem": "..."}
+// Prints {"inclusion": [bool...], "receipts": [bool...]}.
+package main
+
+import (
+	"encoding/json"
+	"os"
+
+	vaos "github.com/christiaan839-beep/verifiable-receipts/packages/verifiable-receipts-go"
+)
+
+type proof struct {
+	LeafHashHex string   `json:"leafHashHex"`
+	LeafIndex   int      `json:"leafIndex"`
+	TreeSize    int      `json:"treeSize"`
+	AuditPath   []string `json:"auditPath"`
+	RootHashHex string   `json:"rootHashHex"`
+}
+
+func main() {
+	var job struct {
+		Inclusion []proof         `json:"inclusion"`
+		Receipts  []vaos.Receipt  `json:"receipts"`
+		PEM       string          `json:"issuerPublicKeyPem"`
+	}
+	if err := json.NewDecoder(os.Stdin).Decode(&job); err != nil {
+		panic(err)
+	}
+	out := struct {
+		Inclusion []bool `json:"inclusion"`
+		Receipts  []bool `json:"receipts"`
+	}{Inclusion: []bool{}, Receipts: []bool{}}
+	for _, p := range job.Inclusion {
+		out.Inclusion = append(out.Inclusion, vaos.VerifyInclusionProof(
+			vaos.InclusionProof{LeafIndex: p.LeafIndex, TreeSize: p.TreeSize, AuditPath: p.AuditPath},
+			p.LeafHashHex, p.RootHashHex))
+	}
+	if job.PEM != "" {
+		pub, err := vaos.LoadEd25519PublicKeyFromPEM([]byte(job.PEM))
+		if err != nil {
+			panic(err)
+		}
+		for _, r := range job.Receipts {
+			out.Receipts = append(out.Receipts, vaos.VerifyV2Receipt(r, pub).OK)
+		}
+	}
+	json.NewEncoder(os.Stdout).Encode(out)
+}

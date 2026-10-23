@@ -1,0 +1,18 @@
+# Build output
+/dist/
+/receipts-log
+
+# Local data directories and keys: never commit them.
+/data/
+*.pem
+!testdata/conformance/public-key.pem
+*.key
+
+# Go fuzzing writes failing inputs here; commit one only as a regression test.
+**/testdata/fuzz/
+
+# Editors and OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

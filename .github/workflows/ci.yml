@@ -1,0 +1,72 @@
+# Format, vet, staticcheck, race-enabled tests, short fuzz runs, a container
+# build, and the cross-implementation tests against verifiable-receipts.
+# Actions are pinned to full commit SHAs (resolved with `git ls-remote`);
+# the token is read-only.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.22", "1.24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+      - run: make fmt-check
+      - run: make vet
+      - if: matrix.go == '1.24'
+        run: make staticcheck
+      - run: make race
+      - if: matrix.go == '1.24'
+        run: make fuzz FUZZTIME=10s
+      - run: make build
+
+  interop:
+    runs-on: ubuntu-latest
+    env:
+      # The verifiable-receipts commit the cross-checks run against.
+      VR_REF: 55d30b72b277a025e7a20e0952aa5813241ba38f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: christiaan839-beep/verifiable-receipts
+          ref: ${{ env.VR_REF }}
+          path: verifiable-receipts
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install "cryptography==50.0.1"
+      - run: make interop VERIFIABLE_RECEIPTS_DIR="$GITHUB_WORKSPACE/verifiable-receipts"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -t receipts-log:ci .
+      - name: Image runs as non-root
+        run: test "$(docker inspect --format '{{.Config.User}}' receipts-log:ci)" = "65532:65532"
+      - run: docker run --rm receipts-log:ci version
