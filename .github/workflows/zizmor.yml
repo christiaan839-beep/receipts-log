@@ -1,0 +1,29 @@
+# zizmor: static analysis of these workflows for injection, over-broad
+# permissions, unpinned actions and credential leaks. Findings go to code
+# scanning.
+name: zizmor
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions: {}
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  zizmor:
+    name: Audit the workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the workflows
+      actions: read # read the workflow run for the upload
+      security-events: write # upload the findings to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          persona: pedantic

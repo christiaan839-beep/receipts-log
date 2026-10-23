@@ -1,13 +1,17 @@
 # Build a static binary, then copy it into a distroless image that runs as
 # the unprivileged "nonroot" user (uid 65532). Base images are pinned by
 # digest; update the digests deliberately.
-FROM golang:1.24-bookworm@sha256:1a6d4452c65dea36aac2e2d606b01b4a029ec90cc1ae53890540ce6173ea77ac AS build
+# The build stage runs on the build machine's platform and cross-compiles
+# for the target, so a multi-platform build needs no emulation.
+FROM --platform=$BUILDPLATFORM golang:1.24-bookworm@sha256:1a6d4452c65dea36aac2e2d606b01b4a029ec90cc1ae53890540ce6173ea77ac AS build
 WORKDIR /src
 COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
       -o /out/receipts-log ./cmd/receipts-log \
  && mkdir -p /out/data
 

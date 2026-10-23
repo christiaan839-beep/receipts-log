@@ -1,5 +1,7 @@
 # receipts-log
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/christiaan839-beep/receipts-log/badge)](https://scorecard.dev/viewer/?uri=github.com/christiaan839-beep/receipts-log)
+
 receipts-log is a transparency-log server and witness for receipts in the
 [verifiable-receipts](https://github.com/christiaan839-beep/verifiable-receipts)
 format. It is written in Go with the standard library only.
