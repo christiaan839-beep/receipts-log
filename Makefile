@@ -5,7 +5,8 @@ GO        ?= go
 BIN       ?= dist/receipts-log
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 FUZZTIME  ?= 15s
-STATICCHECK_VERSION ?= 2025.1.1
+# 2026.2.1 supports Go up to 1.26; CI runs it there (see ci.yml).
+STATICCHECK_VERSION ?= 2026.2.1
 VERIFIABLE_RECEIPTS_DIR ?= ../verifiable-receipts
 IMAGE     ?= receipts-log:$(VERSION)
 

@@ -217,7 +217,7 @@ make fuzz      # every fuzz target for FUZZTIME (default 15s) each
 make interop   # cross-checks against a verifiable-receipts checkout
 ```
 
-CI (`.github/workflows/ci.yml`) runs these on Go 1.22 and 1.24, builds the
+CI (`.github/workflows/ci.yml`) runs these on Go 1.22 (the `go.mod` minimum), 1.26 and 1.27, builds the
 container and runs the interop tests against a pinned verifiable-receipts
 commit. Its actions are pinned to commit SHAs and its token is read-only.
 

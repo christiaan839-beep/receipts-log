@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ["1.22", "1.24"]
+        go: ["1.22", "1.26", "1.27"] # the go.mod minimum and the two supported releases
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,10 +30,12 @@ jobs:
           go-version: ${{ matrix.go }}
       - run: make fmt-check
       - run: make vet
-      - if: matrix.go == '1.24'
+      # Staticcheck 2026.2.1 reads Go 1.26's export data, not 1.27.2's
+      # (2026.2.2 does; it passes the 14-day cooldown on 26 October 2026).
+      - if: matrix.go == '1.26'
         run: make staticcheck
       - run: make race
-      - if: matrix.go == '1.24'
+      - if: matrix.go == '1.27'
         run: make fuzz FUZZTIME=10s
       - run: make build
 
@@ -55,7 +57,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.24"
+          go-version: "1.27"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
