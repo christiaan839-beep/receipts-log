@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/quick"
 
@@ -137,17 +138,28 @@ func TestConformanceInclusionFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// A fixture whose index or hashes do not parse (1.5, true,
+		// uppercase hex, a 64-byte leaf) is rejected before verification.
+		got := false
 		var fx inclusionFixture
 		if err := json.Unmarshal(raw, &fx); err != nil {
-			t.Fatal(err)
+			var shape struct {
+				Expected struct {
+					OK bool `json:"ok"`
+				} `json:"expected"`
+			}
+			if json.Unmarshal(raw, &shape) != nil {
+				t.Fatal(err)
+			}
+			fx.Expected.OK = shape.Expected.OK
+		} else {
+			leaf, err1 := ParseHash(fx.LeafHashHex)
+			root, err2 := ParseHash(fx.RootHashHex)
+			proof, err3 := ParseHashes(fx.AuditPath)
+			if err1 == nil && err2 == nil && err3 == nil {
+				got = VerifyInclusion(leaf, fx.LeafIndex, fx.TreeSize, proof, root) == nil
+			}
 		}
-		leaf, err1 := ParseHash(fx.LeafHashHex)
-		root, err2 := ParseHash(fx.RootHashHex)
-		proof, err3 := ParseHashes(fx.AuditPath)
-		if err1 != nil || err2 != nil || err3 != nil {
-			t.Fatalf("%s: bad fixture", f)
-		}
-		got := VerifyInclusion(leaf, fx.LeafIndex, fx.TreeSize, proof, root) == nil
 		if got != fx.Expected.OK {
 			t.Errorf("%s (%s): got ok=%v, want %v", filepath.Base(f), fx.Description, got, fx.Expected.OK)
 		}
@@ -392,7 +404,7 @@ func TestParseHash(t *testing.T) {
 	if err != nil || got != h {
 		t.Fatal("round trip failed")
 	}
-	for _, bad := range []string{"", "00", h.String() + "0", "zz" + h.String()[2:]} {
+	for _, bad := range []string{"", "00", h.String() + "0", "zz" + h.String()[2:], strings.ToUpper(h.String())} {
 		if _, err := ParseHash(bad); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}

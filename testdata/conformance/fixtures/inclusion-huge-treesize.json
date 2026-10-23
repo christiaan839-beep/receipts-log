@@ -1,0 +1,13 @@
+{
+  "description": "inclusion invalid — the 2-leaf idx 1 proof claimed for a tree of 2^32 + 2 leaves (32-bit index arithmetic accepts it)",
+  "leafHashHex": "e23537b050e84af2cbaab46f2f83d8d3b5febc8e5ac6200d306284f687d46924",
+  "leafIndex": 1,
+  "treeSize": 4294967298,
+  "auditPath": [
+    "2a158d8afd48e3f88cb4195dfdb2a9e4817d95fa57fd34440d93f9aae5c4f82b"
+  ],
+  "rootHashHex": "983cb57c04cddd52634edab38a7bef85708a974f114bbd9aa9ec5d4ce6656b4b",
+  "expected": {
+    "ok": false
+  }
+}

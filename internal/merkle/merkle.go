@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"strings"
 )
 
 // HashSize is the size of every hash in the tree.
@@ -26,11 +27,15 @@ type Hash [HashSize]byte
 // String returns the lowercase hex encoding of h.
 func (h Hash) String() string { return hex.EncodeToString(h[:]) }
 
-// ParseHash decodes a 64-character hex string (either case).
+// ParseHash decodes a hash written as exactly 64 lowercase hex digits,
+// the one spelling every verifier accepts (transparency-log spec §3.6).
 func ParseHash(s string) (Hash, error) {
 	var h Hash
 	if len(s) != 2*HashSize {
 		return h, fmt.Errorf("merkle: hash must be %d hex characters, got %d", 2*HashSize, len(s))
+	}
+	if strings.ToLower(s) != s {
+		return h, errors.New("merkle: hash must be lowercase hex")
 	}
 	if _, err := hex.Decode(h[:], []byte(s)); err != nil {
 		return h, errors.New("merkle: hash is not valid hex")

@@ -212,6 +212,10 @@ func DecodeSignature(wire string) ([]byte, error) {
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return nil, fmt.Errorf("%w: signature is not base64 of 64 bytes", ErrSignature)
 	}
+	// Strict still skips CR and LF; one signature has one spelling.
+	if base64.StdEncoding.EncodeToString(sig) != wire[3:] {
+		return nil, fmt.Errorf("%w: signature is not canonical base64", ErrSignature)
+	}
 	return sig, nil
 }
 

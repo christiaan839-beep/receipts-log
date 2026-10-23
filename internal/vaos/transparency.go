@@ -1,6 +1,6 @@
 // Copied from github.com/christiaan839-beep/verifiable-receipts,
 // packages/verifiable-receipts-go/transparency.go at commit
-// a5637ee5feeb6ef241b99479922f123ea761b5d3 (Apache-2.0, Copyright 2026
+// 03b38ee2d28080a2a4aa0810dbb1dfcd447379fd (Apache-2.0, Copyright 2026
 // Christiaan de Wet / Sovereign Matrix). Changed: this notice added; the
 // code below is otherwise unchanged. See internal/vaos/README.md.
 
@@ -50,6 +50,21 @@ func InnerHash(leftHex, rightHex string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// isHashHex reports whether s is a wire hash: 32 bytes written as
+// exactly 64 lowercase hex digits.
+func isHashHex(s string) bool {
+	if len(s) != 2*sha256.Size {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // InclusionProof is the wire shape of an RFC 9162 audit path.
 type InclusionProof struct {
 	// LeafIndex is the 0-based position of the leaf in the tree.
@@ -94,13 +109,23 @@ func onesCount(n int) int {
 // Returns false (not error) for all routine failure modes — wrong
 // root, wrong index, malformed audit path entry, leaf-index out of
 // range, zero tree size — so callers can use it as a predicate
-// without exception-handling.
+// without exception-handling. Every hash must be 64 lowercase hex
+// digits (32 bytes): a hash has one spelling, and a longer "leaf"
+// cannot stand in for two hashes.
 func VerifyInclusionProof(proof InclusionProof, leafHashHex, rootHashHex string) bool {
 	if proof.TreeSize <= 0 {
 		return false
 	}
 	if proof.LeafIndex < 0 || proof.LeafIndex >= proof.TreeSize {
 		return false
+	}
+	if !isHashHex(leafHashHex) || !isHashHex(rootHashHex) {
+		return false
+	}
+	for _, h := range proof.AuditPath {
+		if !isHashHex(h) {
+			return false
+		}
 	}
 	// Single-leaf tree: root equals leaf, no audit path.
 	if proof.TreeSize == 1 {
