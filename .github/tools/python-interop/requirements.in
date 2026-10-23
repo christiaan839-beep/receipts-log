@@ -1,4 +1,4 @@
 # The interop tests' Python helper needs only cryptography. Compile
 # requirements.txt from this with:
 #   uv pip compile --generate-hashes --python-version 3.12 --exclude-newer <14 days ago> -o requirements.txt requirements.in
-cryptography==50.0.1
+cryptography==50.0.2
