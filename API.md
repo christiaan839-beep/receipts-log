@@ -8,9 +8,10 @@ nosniff` and `Cache-Control: no-store` (the public key is cacheable for five
 minutes). The read routes (`GET /v1/entries/{index}`, `/v1/sth`,
 `/v1/proof/inclusion`, `/v1/proof/consistency`, `/v1/public-key`,
 `/v1/cosignatures`, and the `/api/transparency/` read routes) also send
-`Access-Control-Allow-Origin: *`, so a browser-based verifier on any origin can
-read them. They serve public data and take no credentials. The write routes and
-`/healthz` are same-origin only.
+`Access-Control-Allow-Origin: *`, including on the server's own 503, 414 and 500
+responses to them, so a browser-based verifier on any origin can read them. They
+serve public data and take no credentials. The write routes and `/healthz` are
+same-origin only.
 
 The wire formats are those of verifiable-receipts' transparency log
 (`docs/specs/transparency-log.md`): RFC 6962 leaf and node hashes, RFC 9162
