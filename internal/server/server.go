@@ -75,19 +75,29 @@ func New(l *translog.Log, opts Options) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/entries", s.postEntry)
-	mux.HandleFunc("GET /v1/entries/{index}", s.getEntry)
-	mux.HandleFunc("GET /v1/sth", s.getSTH)
-	mux.HandleFunc("GET /v1/proof/inclusion", s.getInclusion)
-	mux.HandleFunc("GET /v1/proof/consistency", s.getConsistency)
-	mux.HandleFunc("GET /v1/public-key", s.getPublicKey)
+	mux.HandleFunc("GET /v1/entries/{index}", anyOrigin(s.getEntry))
+	mux.HandleFunc("GET /v1/sth", anyOrigin(s.getSTH))
+	mux.HandleFunc("GET /v1/proof/inclusion", anyOrigin(s.getInclusion))
+	mux.HandleFunc("GET /v1/proof/consistency", anyOrigin(s.getConsistency))
+	mux.HandleFunc("GET /v1/public-key", anyOrigin(s.getPublicKey))
 	mux.HandleFunc("POST /v1/cosignatures", s.postCosignature)
-	mux.HandleFunc("GET /v1/cosignatures", s.getCosignatures)
+	mux.HandleFunc("GET /v1/cosignatures", anyOrigin(s.getCosignatures))
 	mux.HandleFunc("GET /healthz", s.getHealth)
 	// The routes the verifiable-receipts witness CLI (bin/witness.mjs) calls.
-	mux.HandleFunc("GET /api/transparency/sth", s.getSTH)
-	mux.HandleFunc("GET /api/transparency/proof", s.getCompatProof)
+	mux.HandleFunc("GET /api/transparency/sth", anyOrigin(s.getSTH))
+	mux.HandleFunc("GET /api/transparency/proof", anyOrigin(s.getCompatProof))
 	mux.HandleFunc("POST /api/transparency/witness", s.postCosignature)
 	return s.middleware(jsonErrors(mux))
+}
+
+// anyOrigin lets a page on any origin read the response. The read routes
+// serve public data and take no credentials; a browser-based verifier
+// fetches them from its own origin. The write routes stay same-origin.
+func anyOrigin(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		h(w, r)
+	}
 }
 
 // jsonErrors answers the mux's own 404 and 405 responses with JSON.
@@ -427,7 +437,6 @@ func (s *Server) getCompatProof(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getPublicKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	_, _ = w.Write(s.pubPEM)
 }

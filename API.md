@@ -5,7 +5,12 @@ All responses are JSON (`Content-Type: application/json`) except
 64 lowercase hex characters. Sizes and indices are decimal integers no larger
 than 2^53 − 1. Every response carries `X-Request-Id`, `X-Content-Type-Options:
 nosniff` and `Cache-Control: no-store` (the public key is cacheable for five
-minutes).
+minutes). The read routes (`GET /v1/entries/{index}`, `/v1/sth`,
+`/v1/proof/inclusion`, `/v1/proof/consistency`, `/v1/public-key`,
+`/v1/cosignatures`, and the `/api/transparency/` read routes) also send
+`Access-Control-Allow-Origin: *`, so a browser-based verifier on any origin can
+read them. They serve public data and take no credentials. The write routes and
+`/healthz` are same-origin only.
 
 The wire formats are those of verifiable-receipts' transparency log
 (`docs/specs/transparency-log.md`): RFC 6962 leaf and node hashes, RFC 9162
@@ -140,9 +145,8 @@ newRoot, proof)` using roots from STHs you trust.
 
 ### `GET /v1/public-key`
 
-The log's Ed25519 public key as SPKI PEM (`application/x-pem-file`,
-`Access-Control-Allow-Origin: *`). Fetching it over the same channel as the STHs
-proves nothing; distribute it out of band.
+The log's Ed25519 public key as SPKI PEM (`application/x-pem-file`). Fetching it
+over the same channel as the STHs proves nothing; distribute it out of band.
 
 ### `POST /v1/cosignatures` and `POST /api/transparency/witness`
 
