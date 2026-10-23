@@ -2,18 +2,17 @@
 
 `verify.go` and `transparency.go` are copies of the Go verifier in
 [verifiable-receipts](https://github.com/christiaan839-beep/verifiable-receipts)
-(`packages/verifiable-receipts-go`, commit `55d30b72b277a025e7a20e0952aa5813241ba38f`),
-licensed Apache-2.0.
+(`packages/verifiable-receipts-go`, commit `a5637ee5feeb6ef241b99479922f123ea761b5d3`),
+licensed Apache-2.0. The only change is a provenance notice at the top of
+each file.
 
-Changes from that commit:
-
-- a provenance notice at the top of each file;
-- `VerifyV2Receipt` decodes the signature's base64 strictly
-  (`base64.StdEncoding.Strict()`), so a signature with non-zero padding bits
-  is refused and every signature has one valid string form. The
-  verifiable-receipts working tree carries the same change and the fixture
-  `v2-invalid-noncanonical-base64.json`, which is copied into
-  `testdata/conformance/fixtures/`.
+That commit's `VerifyV2Receipt` gives every signature one valid string form:
+it decodes the base64 strictly (non-zero padding bits are refused) and checks
+that the decoded bytes re-encode to the exact text, which refuses CR and LF
+that Go's decoder otherwise skips. The fixtures
+`v2-invalid-noncanonical-base64.json` and `v2-invalid-crlf-base64.json` are
+copied into `testdata/conformance/fixtures/`, and the log's admission tests
+run every `v2-*.json` fixture.
 
 The log server uses `VerifyV2Receipt` and `VerifyGuardianAttestation` to admit
 receipts, so admission follows the published verifier's rules. The tests use

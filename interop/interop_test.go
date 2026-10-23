@@ -545,17 +545,9 @@ func TestFixturesAndVerifierCopiesMatchCheckout(t *testing.T) {
 		if i < 0 {
 			t.Fatalf("internal/vaos/%s has no notice", name)
 		}
-		body := copied[i+2:]
-		if bytes.Equal(body, orig) {
-			continue
+		if !bytes.Equal(copied[i+2:], orig) {
+			t.Errorf("internal/vaos/%s differs from the checkout beyond its notice", name)
 		}
-		// A checkout from before the strict-base64 change (for example
-		// commit 55d30b7) differs from the copy by exactly that change.
-		if bytes.Equal(bytes.Replace(body, []byte(strictDecode), []byte(laxDecode), 1), orig) {
-			t.Logf("internal/vaos/%s: the checkout predates the strict base64 decoding the copy has", name)
-			continue
-		}
-		t.Errorf("internal/vaos/%s differs from the checkout beyond its notice and the strict base64 change", name)
 	}
 }
 
@@ -589,10 +581,3 @@ func TestCanonicalTreeHeadEscaping(t *testing.T) {
 		}
 	}
 }
-
-const (
-	laxDecode    = "\tsigBytes, err := base64.StdEncoding.DecodeString(r.Signature[3:])"
-	strictDecode = "\t// Strict: reject non-zero padding bits, so one signature has\n" +
-		"\t// exactly one valid string form.\n" +
-		"\tsigBytes, err := base64.StdEncoding.Strict().DecodeString(r.Signature[3:])"
-)
