@@ -3,7 +3,7 @@
 # digest; update the digests deliberately.
 # The build stage runs on the build machine's platform and cross-compiles
 # for the target, so a multi-platform build needs no emulation.
-FROM --platform=$BUILDPLATFORM golang:1.24-bookworm@sha256:1a6d4452c65dea36aac2e2d606b01b4a029ec90cc1ae53890540ce6173ea77ac AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS build
 WORKDIR /src
 COPY go.mod ./
 COPY cmd ./cmd
