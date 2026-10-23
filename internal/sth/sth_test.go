@@ -78,6 +78,8 @@ func TestSignVerify(t *testing.T) {
 		func(x *STH) { x.Timestamp = FormatTime(time.Unix(0, 0)) },
 		func(x *STH) { x.RootHash = merkle.LeafHash(nil).String() },
 		func(x *STH) { x.Signature = "v2=AAAA" },
+		func(x *STH) { x.Signature = x.Signature[:7] + "\n" + x.Signature[7:] },
+		func(x *STH) { x.Signature += "\r\n" },
 		func(x *STH) { x.Signature = "v3=" + x.Signature[3:] },
 		func(x *STH) { x.V = 2 },
 	} {

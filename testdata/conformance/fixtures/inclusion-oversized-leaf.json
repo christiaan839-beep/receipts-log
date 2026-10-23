@@ -1,0 +1,13 @@
+{
+  "description": "inclusion invalid — a 64-byte \"leaf\" (two leaf hashes joined) with an empty audit-path entry; it folds to the 2-leaf root, so only the 32-byte rule rejects it",
+  "leafHashHex": "2a158d8afd48e3f88cb4195dfdb2a9e4817d95fa57fd34440d93f9aae5c4f82be23537b050e84af2cbaab46f2f83d8d3b5febc8e5ac6200d306284f687d46924",
+  "leafIndex": 0,
+  "treeSize": 2,
+  "auditPath": [
+    ""
+  ],
+  "rootHashHex": "983cb57c04cddd52634edab38a7bef85708a974f114bbd9aa9ec5d4ce6656b4b",
+  "expected": {
+    "ok": false
+  }
+}

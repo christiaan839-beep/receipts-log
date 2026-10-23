@@ -75,7 +75,8 @@ func FuzzVerifyConsistency(f *testing.F) {
 	})
 }
 
-// FuzzParseHashes checks the hex decoder never panics and round-trips.
+// FuzzParseHashes checks the hex decoder never panics, round-trips, and
+// accepts only the one spelling it emits.
 func FuzzParseHashes(f *testing.F) {
 	f.Add("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 	f.Add("")
@@ -83,6 +84,9 @@ func FuzzParseHashes(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string) {
 		h, err := ParseHash(s)
 		if err == nil {
+			if h.String() != s {
+				t.Fatalf("accepted %q, a second spelling of %s", s, h)
+			}
 			back, err := ParseHash(h.String())
 			if err != nil || back != h {
 				t.Fatal("round trip failed")
