@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -23,9 +22,11 @@ import (
 	"time"
 
 	"github.com/christiaan839-beep/receipts-log/internal/keys"
+	"github.com/christiaan839-beep/receipts-log/internal/logclient"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
 	"github.com/christiaan839-beep/receipts-log/internal/server"
 	"github.com/christiaan839-beep/receipts-log/internal/sth"
+	"github.com/christiaan839-beep/receipts-log/internal/store"
 	"github.com/christiaan839-beep/receipts-log/internal/translog"
 	"github.com/christiaan839-beep/receipts-log/internal/witness"
 )
@@ -53,8 +54,9 @@ Usage:
   receipts-log check    -data DIR -log-id ID -log-public-key FILE
   receipts-log version
 
-Run "receipts-log <command> -h" for a command's flags. Every flag of serve
-and witness can also be set with an environment variable (shown in -h).
+Run "receipts-log <command> -h" for a command's flags. The serve and
+witness flags that name files, identifiers, addresses and the log level
+can also be set with environment variables; -h names each one.
 
 Exit codes: 0 success, 1 verification failed or fork detected,
 2 usage, configuration or network error.
@@ -143,14 +145,9 @@ func newFlags(name string, stderr io.Writer) *flag.FlagSet {
 	return fs
 }
 
-func parseLevel(s string) (slog.Level, error) {
-	var l slog.Level
-	return l, l.UnmarshalText([]byte(s))
-}
-
 func newLogger(w io.Writer, level string) (*slog.Logger, error) {
-	lv, err := parseLevel(level)
-	if err != nil {
+	var lv slog.Level
+	if err := lv.UnmarshalText([]byte(level)); err != nil {
 		return nil, fmt.Errorf("-log-level: %w", err)
 	}
 	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lv})), nil
@@ -166,7 +163,7 @@ func cmdServe(args []string, stderr io.Writer) error {
 	fs.Var(&issuers, "issuer-key", "SPKI PEM Ed25519 issuer public key; repeat for several (RECEIPTS_LOG_ISSUER_KEYS, comma-separated)")
 	witnesses := envList("RECEIPTS_LOG_WITNESS_KEYS")
 	fs.Var(&witnesses, "witness-key", "NAME=FILE: a witness ID and its SPKI PEM public key; repeat for several (RECEIPTS_LOG_WITNESS_KEYS, comma-separated)")
-	maxEntry := fs.Int("max-entry-bytes", 1<<20, "largest receipt accepted, in bytes")
+	maxEntry := fs.Int("max-entry-bytes", store.DefaultMaxPayload, "largest receipt accepted, in bytes")
 	sthInterval := fs.Duration("sth-interval", time.Hour, "re-sign the tree head this often when idle (0 disables)")
 	maxInFlight := fs.Int("max-in-flight", server.DefaultMaxInFlight, "concurrent requests before 503")
 	tlsCert := fs.String("tls-cert", envDefault("RECEIPTS_LOG_TLS_CERT", ""), "TLS certificate file; serve HTTPS when set with -tls-key (RECEIPTS_LOG_TLS_CERT)")
@@ -300,7 +297,7 @@ func cmdWitness(args []string, stdout, stderr io.Writer) (int, error) {
 	once := fs.Bool("once", false, "check once and exit")
 	interval := fs.Duration("interval", time.Hour, "poll interval in daemon mode (at least 1m)")
 	jsonOut := fs.Bool("json", false, "print one JSON result per check")
-	level := fs.String("log-level", envDefault("RECEIPTS_LOG_LEVEL", "info"), "debug, info, warn or error")
+	level := fs.String("log-level", envDefault("RECEIPTS_LOG_LEVEL", "info"), "debug, info, warn or error (RECEIPTS_LOG_LEVEL)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, err
 	}
@@ -427,26 +424,17 @@ func cmdPubkey(args []string, stdout, stderr io.Writer) error {
 	return err
 }
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
-
-func getJSON(base, path string, q url.Values, out any) (int, error) {
-	u := strings.TrimRight(base, "/") + path
-	if len(q) > 0 {
-		u += "?" + q.Encode()
+// fetchSTH fetches and verifies the log's latest tree head. A head that
+// fails verification is exitFail; any other error is exitUsage.
+func fetchSTH(c *logclient.Client, logKey ed25519.PublicKey) (sth.STH, int, error) {
+	head, _, err := c.FetchSTH(context.Background(), logKey)
+	if errors.Is(err, sth.ErrSignature) || errors.Is(err, sth.ErrInvalid) {
+		return sth.STH{}, exitFail, err
 	}
-	resp, err := httpClient.Get(u)
 	if err != nil {
-		return 0, err
+		return sth.STH{}, exitUsage, err
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return resp.StatusCode, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, fmt.Errorf("GET %s: HTTP %d %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-	return resp.StatusCode, json.Unmarshal(data, out)
+	return head, exitOK, nil
 }
 
 func cmdAppend(args []string, stdout, stderr io.Writer) (int, error) {
@@ -463,20 +451,25 @@ func cmdAppend(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return exitUsage, err
 	}
-	resp, err := httpClient.Post(strings.TrimRight(*base, "/")+"/v1/entries", "application/json", bytes.NewReader(body))
+	c, err := logclient.New(*base, nil)
 	if err != nil {
 		return exitUsage, err
 	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	stdout.Write(out)
+	var out json.RawMessage
+	err = c.Post(context.Background(), "/v1/entries", body, &out)
+	var se *logclient.StatusError
 	switch {
-	case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated:
+	case err == nil:
+		fmt.Fprintln(stdout, string(out))
 		return exitOK, nil
-	case resp.StatusCode == http.StatusUnprocessableEntity || resp.StatusCode == http.StatusBadRequest:
-		return exitFail, fmt.Errorf("log refused the receipt: HTTP %d", resp.StatusCode)
+	case errors.As(err, &se):
+		stdout.Write(se.Body)
+		if se.Status == http.StatusUnprocessableEntity || se.Status == http.StatusBadRequest {
+			return exitFail, fmt.Errorf("log refused the receipt: HTTP %d", se.Status)
+		}
+		return exitUsage, fmt.Errorf("HTTP %d", se.Status)
 	default:
-		return exitUsage, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return exitUsage, err
 	}
 }
 
@@ -494,12 +487,13 @@ func cmdSTH(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return exitUsage, err
 	}
-	head, _, err := witness.FetchSTH(context.Background(), httpClient, *base, lk)
+	c, err := logclient.New(*base, nil)
 	if err != nil {
-		if errors.Is(err, sth.ErrSignature) || errors.Is(err, sth.ErrInvalid) {
-			return exitFail, err
-		}
 		return exitUsage, err
+	}
+	head, code, err := fetchSTH(c, lk)
+	if err != nil {
+		return code, err
 	}
 	out, _ := json.MarshalIndent(head, "", "  ")
 	fmt.Fprintln(stdout, string(out))
@@ -529,9 +523,13 @@ func cmdProve(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return exitUsage, err
 	}
-	head, _, err := witness.FetchSTH(context.Background(), httpClient, *base, lk)
+	c, err := logclient.New(*base, nil)
 	if err != nil {
 		return exitUsage, err
+	}
+	head, code, err := fetchSTH(c, lk)
+	if err != nil {
+		return code, err
 	}
 	if head.TreeSize == 0 {
 		return exitFail, errors.New("the log is empty")
@@ -542,21 +540,21 @@ func cmdProve(args []string, stdout, stderr io.Writer) (int, error) {
 		AuditPath []string `json:"auditPath"`
 	}
 	q := url.Values{"leafHash": {leaf.String()}, "treeSize": {fmt.Sprint(head.TreeSize)}}
-	code, err := getJSON(*base, "/v1/proof/inclusion", q, &p)
-	if code == http.StatusNotFound {
+	err = c.Get(context.Background(), "/v1/proof/inclusion", q, &p)
+	if logclient.IsStatus(err, http.StatusNotFound) {
 		return exitFail, errors.New("the receipt is not in the log")
 	}
 	if err != nil {
 		return exitUsage, err
 	}
+	if p.TreeSize != head.TreeSize {
+		return exitFail, errors.New("the proof is for a different tree size")
+	}
 	path, err := merkle.ParseHashes(p.AuditPath)
 	if err != nil {
 		return exitFail, err
 	}
-	root, _ := head.Root()
-	if p.TreeSize != head.TreeSize {
-		return exitFail, errors.New("the proof is for a different tree size")
-	}
+	root, _ := head.Root() // FetchSTH verified the head, root included
 	if err := merkle.VerifyInclusion(leaf, p.LeafIndex, head.TreeSize, path, root); err != nil {
 		return exitFail, fmt.Errorf("inclusion proof rejected: %w", err)
 	}

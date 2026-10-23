@@ -48,7 +48,7 @@ rebuild it; a verifier should rebuild it from the other fields and compare.
 | Query string | 2048 bytes (414 above it) |
 | Request headers | 16 KiB |
 | Concurrent requests | `-max-in-flight`, default 256 (503 with `Retry-After: 1` above it) |
-| Timeouts | header 5 s, read 20 s, write 40 s, idle 90 s, handler 30 s |
+| Timeouts | header 5 s, read 20 s, write 40 s, idle 90 s |
 
 ## Routes
 
@@ -66,11 +66,11 @@ written durably and a new STH is signed before the response is sent.
 | --- | --- |
 | 201 | Appended |
 | 200 | Already logged (same `canonical`); the existing entry is returned |
-| 400 | Not a JSON object, or no `canonical` |
+| 400 | Not a JSON object, no `canonical`, or a `canonical`, `contentHash` or `signature` that is not a string |
 | 413 | Body too large |
 | 415 | Content type other than `application/json` |
 | 422 | Signature does not verify under any issuer key (the reason is in `error`) |
-| 503 | The log is read-only after a storage failure, or busy |
+| 503 | The log is read-only after a storage failure, holds 2^53 − 1 entries, or is busy |
 
 ```json
 {"index": 0, "leafHash": "<hex>", "duplicate": false, "sth": { <STH as above> }}
@@ -82,7 +82,8 @@ written durably and a new STH is signed before the response is sent.
 {"index": 0, "leafHash": "<hex>", "receipt": { <the receipt as submitted, compact JSON> }}
 ```
 
-404 when `index` is not below the latest tree size.
+400 when `index` is not a decimal integer; 404 when it is not below the latest
+tree size.
 
 ### `GET /v1/sth` and `GET /api/transparency/sth`
 
@@ -112,13 +113,14 @@ The fields are named as in verifiable-receipts' conformance fixtures, so the
 response can be passed to its TypeScript `verifyInclusionProof`, Python
 `verify_inclusion_proof` or Go `VerifyInclusionProof` as is. `rootHashHex` is
 the root at `treeSize`; check it against an STH you trust, not against this
-response. 400 for a bad query or a size beyond the latest tree, 404 for an
-unknown `leafHash`.
+response. 400 for a bad query or an index or size beyond the latest tree, 404
+for a `leafHash` that is not in the latest tree.
 
 ### `GET /v1/proof/consistency`
 
 Query: `old=<m>` and optionally `new=<n>` (default: the latest tree size), with
 `m <= n`. Also served as `GET /api/transparency/proof?kind=consistency&old=<m>&new=<n>`.
+400 for a bad query, `m > n`, or `n` beyond the latest tree.
 
 ```json
 {
@@ -165,9 +167,15 @@ Cosignatures are stored durably; a repeated submission is not stored twice.
 | 400 | Malformed body or non-canonical `sthCanonical` |
 | 403 | Unknown witness |
 | 409 | The tree head is not one this log produced |
+| 413 | Body larger than 64 KiB |
+| 415 | Content type other than `application/json` |
 | 422 | The witness signature does not verify |
+| 503 | The log is read-only after a storage failure, or busy |
 
 ### `GET /v1/cosignatures?treeSize=<n>`
+
+`treeSize` is required (400 without it). The response lists the cosignatures
+recorded for tree heads of that size:
 
 ```json
 {"treeSize": 7, "cosignatures": [{"witnessId": "w1", "treeSize": 7, "rootHash": "<hex>", "timestamp": "...", "sthCanonical": "...", "signature": "v2=...", "publicKeyUrl": "...", "receivedAt": "..."}]}

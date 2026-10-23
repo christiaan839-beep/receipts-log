@@ -19,8 +19,9 @@ consistency proof that any witness or auditor can check.
 ## What it does
 
 - Admits a receipt only when its Ed25519 `v2=` signature verifies under a
-  configured issuer key, by the rules of the verifiable-receipts Go verifier
-  (copied into `internal/vaos`).
+  configured issuer key, as a VAOS 2.0 receipt or as a Guardian attestation,
+  by the rules of the verifiable-receipts Go verifier (copied into
+  `internal/vaos`).
 - Logs each receipt under `SHA-256(0x00 || canonical)`, the leaf hash of the
   verifiable-receipts transparency-log spec; a receipt submitted twice is one
   entry.
@@ -84,10 +85,12 @@ dist/receipts-log serve \
   -issuer-key issuer.pem -witness-key w1=w1.pub -addr :8080
 ```
 
-Every `serve` flag has an environment variable (`RECEIPTS_LOG_DATA`,
-`RECEIPTS_LOG_ID`, `RECEIPTS_LOG_KEY_FILE`, `RECEIPTS_LOG_ISSUER_KEYS`,
+The `serve` flags that name files, identifiers, the address and the log level
+also read environment variables (`RECEIPTS_LOG_DATA`, `RECEIPTS_LOG_ID`,
+`RECEIPTS_LOG_KEY_FILE`, `RECEIPTS_LOG_ISSUER_KEYS`,
 `RECEIPTS_LOG_WITNESS_KEYS`, `RECEIPTS_LOG_ADDR`, …); `receipts-log serve -h`
-lists them. Logs are JSON lines on stderr, one per request plus lifecycle
+names each one. `-max-entry-bytes`, `-max-in-flight` and `-sth-interval` are
+flags only. Logs are JSON lines on stderr, one per request plus lifecycle
 events. `-tls-cert` and `-tls-key` serve HTTPS directly; otherwise put the
 server behind a TLS-terminating proxy.
 
@@ -184,7 +187,7 @@ must be restarted, which re-verifies the store.
   file is readable by group or others. No key or secret is in this repository;
   tests generate keys at run time.
 - **Input handling.** Request bodies, headers and query strings are size
-  limited; requests have read, write and handler timeouts; concurrency is
+  limited; requests have header, read, write and idle timeouts; concurrency is
   bounded; handler panics are contained and logged. The decoders for stored
   records, receipts, tree heads, proofs, keys and HTTP requests are fuzzed.
 - **Integrity at rest.** CRCs catch accidental corruption. Deliberate tampering
@@ -206,8 +209,9 @@ must be restarted, which re-verifies the store.
   canonical string.
 - There is no rate limiting per client, no authentication on submission (the
   issuer signature is the admission control), and no gossip between witnesses.
-- Entries are stored as submitted. The issuer must not submit receipts whose
-  `canonical` holds personal data that may not be published.
+- Entries are stored as submitted, re-encoded as compact JSON, and served to
+  anyone. The issuer must not submit receipts whose `canonical` holds personal
+  data that may not be published.
 
 ## Development
 
@@ -217,9 +221,11 @@ make fuzz      # every fuzz target for FUZZTIME (default 15s) each
 make interop   # cross-checks against a verifiable-receipts checkout
 ```
 
-CI (`.github/workflows/ci.yml`) runs these on Go 1.22 (the `go.mod` minimum), 1.26 and 1.27, builds the
-container and runs the interop tests against a pinned verifiable-receipts
-commit. Its actions are pinned to commit SHAs and its token is read-only.
+CI (`.github/workflows/ci.yml`) runs gofmt, go vet, the race-enabled tests and
+the build on Go 1.22 (the `go.mod` minimum), 1.26 and 1.27; staticcheck on
+1.26; every fuzz target for 10 s on 1.27; the interop tests against a pinned
+verifiable-receipts commit; and a container build. Its actions are pinned to
+commit SHAs and its token is read-only.
 
 ## Licence
 

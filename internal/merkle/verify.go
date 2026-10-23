@@ -5,12 +5,13 @@ import (
 	"math/bits"
 )
 
-// Verification errors. Every verifier returns nil or one of these, and
-// never panics, whatever its input.
+// Errors. Every verifier returns nil or one of these, and never panics,
+// whatever its input; Tree returns ErrRange for an index or size beyond
+// its leaves.
 var (
 	ErrProofSize = errors.New("merkle: proof has the wrong number of hashes")
 	ErrRoot      = errors.New("merkle: proof does not lead to the expected root")
-	ErrRange     = errors.New("merkle: index or sizes out of range")
+	ErrRange     = errors.New("merkle: index or size out of range")
 )
 
 // RootFromInclusion folds leaf with an audit path for index in a tree of

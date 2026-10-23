@@ -94,6 +94,9 @@ func TestCLIEndToEnd(t *testing.T) {
 	if code, _, _ := runCLI(t, "prove", "-url", base, "-file", p("r2.json"), "-log-public-key", p("log.pub")); code != 1 {
 		t.Fatal("prove of an absent receipt did not fail")
 	}
+	if code, _, _ := runCLI(t, "prove", "-url", base, "-file", p("r1.json"), "-log-public-key", p("issuer.pub")); code != 1 {
+		t.Fatalf("prove under the wrong log key: exit %d, want 1", code)
+	}
 
 	wargs := []string{"witness", "-url", base, "-key", p("witness.key"), "-witness-id", "w1",
 		"-log-public-key", p("log.pub"), "-state", p("wstate.json"), "-once", "-json"}
