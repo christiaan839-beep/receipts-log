@@ -74,20 +74,29 @@ func New(l *translog.Log, opts Options) (*Server, error) {
 // Handler returns the routed handler with its middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	reads := map[string]bool{}
+	read := func(pattern string, h http.HandlerFunc) {
+		reads[pattern] = true
+		mux.HandleFunc(pattern, anyOrigin(h))
+	}
 	mux.HandleFunc("POST /v1/entries", s.postEntry)
-	mux.HandleFunc("GET /v1/entries/{index}", anyOrigin(s.getEntry))
-	mux.HandleFunc("GET /v1/sth", anyOrigin(s.getSTH))
-	mux.HandleFunc("GET /v1/proof/inclusion", anyOrigin(s.getInclusion))
-	mux.HandleFunc("GET /v1/proof/consistency", anyOrigin(s.getConsistency))
-	mux.HandleFunc("GET /v1/public-key", anyOrigin(s.getPublicKey))
+	read("GET /v1/entries/{index}", s.getEntry)
+	read("GET /v1/sth", s.getSTH)
+	read("GET /v1/proof/inclusion", s.getInclusion)
+	read("GET /v1/proof/consistency", s.getConsistency)
+	read("GET /v1/public-key", s.getPublicKey)
 	mux.HandleFunc("POST /v1/cosignatures", s.postCosignature)
-	mux.HandleFunc("GET /v1/cosignatures", anyOrigin(s.getCosignatures))
+	read("GET /v1/cosignatures", s.getCosignatures)
 	mux.HandleFunc("GET /healthz", s.getHealth)
 	// The routes the verifiable-receipts witness CLI (bin/witness.mjs) calls.
-	mux.HandleFunc("GET /api/transparency/sth", anyOrigin(s.getSTH))
-	mux.HandleFunc("GET /api/transparency/proof", anyOrigin(s.getCompatProof))
+	read("GET /api/transparency/sth", s.getSTH)
+	read("GET /api/transparency/proof", s.getCompatProof)
 	mux.HandleFunc("POST /api/transparency/witness", s.postCosignature)
-	return s.middleware(jsonErrors(mux))
+	isRead := func(r *http.Request) bool {
+		_, pattern := mux.Handler(r)
+		return reads[pattern]
+	}
+	return s.middleware(jsonErrors(mux), isRead)
 }
 
 // anyOrigin lets a page on any origin read the response. The read routes
@@ -152,7 +161,11 @@ func requestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func (s *Server) middleware(next http.Handler) http.Handler {
+// middleware sets the common headers, enforces the request limits, recovers
+// panics and logs each request. isRead reports whether r targets a read
+// route; the 503, 414 and 500 written here then allow any origin too, or a
+// browser verifier would see a network error instead of a status it can act on.
+func (s *Server) middleware(next http.Handler, isRead func(*http.Request) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		id := requestID()
@@ -163,11 +176,17 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "no-store")
 		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 		h.Set("Referrer-Policy", "no-referrer")
+		fail := func(code int, msg string) {
+			if isRead(r) {
+				h.Set("Access-Control-Allow-Origin", "*")
+			}
+			writeError(sw, code, msg)
+		}
 		defer func() {
 			if rec := recover(); rec != nil {
 				s.logger.Error("panic in handler", "requestId", id, "panic", fmt.Sprint(rec), "stack", string(debug.Stack()))
 				if sw.status == 0 {
-					writeError(sw, http.StatusInternalServerError, "internal error")
+					fail(http.StatusInternalServerError, "internal error")
 				}
 			}
 			s.logger.Info("request", "requestId", id, "method", r.Method, "path", r.URL.Path,
@@ -179,11 +198,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			defer func() { <-s.sem }()
 		default:
 			h.Set("Retry-After", "1")
-			writeError(sw, http.StatusServiceUnavailable, "server is busy")
+			fail(http.StatusServiceUnavailable, "server is busy")
 			return
 		}
 		if len(r.URL.RawQuery) > maxQueryLen {
-			writeError(sw, http.StatusRequestURITooLong, "query string too long")
+			fail(http.StatusRequestURITooLong, "query string too long")
 			return
 		}
 		next.ServeHTTP(sw, r)

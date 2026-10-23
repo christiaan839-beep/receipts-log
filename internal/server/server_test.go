@@ -230,7 +230,7 @@ func TestBadRequests(t *testing.T) {
 func TestPanicIsContained(t *testing.T) {
 	f := setup(t)
 	s, _ := New(f.log, Options{})
-	h := s.middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }))
+	h := s.middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }), func(*http.Request) bool { return false })
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != 500 || !strings.Contains(rec.Body.String(), "internal error") {
@@ -327,5 +327,75 @@ func TestReadRoutesAllowAnyOrigin(t *testing.T) {
 	resp.Body.Close()
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("GET /healthz: Access-Control-Allow-Origin %q, want none", got)
+	}
+}
+
+// The middleware's own 503 and 414 also allow any origin on the read
+// routes, so a browser verifier sees the status, not a network error.
+func TestEarlyErrorsAllowAnyOriginOnReadRoutes(t *testing.T) {
+	f := setup(t)
+	busy, _ := New(f.log, Options{MaxInFlight: 1})
+	busy.sem <- struct{}{}
+	long := "?" + strings.Repeat("a", maxQueryLen+1)
+	cases := []struct {
+		method, path string
+		read         bool
+	}{
+		{"GET", "/v1/entries/0", true},
+		{"GET", "/v1/sth", true},
+		{"HEAD", "/v1/sth", true},
+		{"GET", "/v1/proof/inclusion", true},
+		{"GET", "/v1/proof/consistency", true},
+		{"GET", "/v1/public-key", true},
+		{"GET", "/v1/cosignatures", true},
+		{"GET", "/api/transparency/sth", true},
+		{"GET", "/api/transparency/proof", true},
+		{"POST", "/v1/entries", false},
+		{"POST", "/v1/cosignatures", false},
+		{"GET", "/healthz", false},
+		{"GET", "/v1/nothing", false},
+		{"DELETE", "/v1/sth", false},
+	}
+	for _, c := range cases {
+		want := ""
+		if c.read {
+			want = "*"
+		}
+		for _, e := range []struct {
+			h    http.Handler
+			path string
+			code int
+		}{
+			{busy.Handler(), c.path, http.StatusServiceUnavailable},
+			{f.srv.Config.Handler, c.path + long, http.StatusRequestURITooLong},
+		} {
+			rec := httptest.NewRecorder()
+			e.h.ServeHTTP(rec, httptest.NewRequest(c.method, e.path, nil))
+			if rec.Code != e.code {
+				t.Fatalf("%s %s: got %d, want %d", c.method, c.path, rec.Code, e.code)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != want {
+				t.Errorf("%s %s (%d): Access-Control-Allow-Origin %q, want %q", c.method, c.path, e.code, got, want)
+			}
+		}
+	}
+}
+
+// So does the 500 after a recovered panic, and only on a read route.
+func TestPanicAllowsAnyOriginOnReadRoutes(t *testing.T) {
+	f := setup(t)
+	s, _ := New(f.log, Options{})
+	boom := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })
+	for _, read := range []bool{true, false} {
+		h := s.middleware(boom, func(*http.Request) bool { return read })
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/sth", nil))
+		want := ""
+		if read {
+			want = "*"
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); rec.Code != 500 || got != want {
+			t.Errorf("read %v: %d, Access-Control-Allow-Origin %q, want 500 and %q", read, rec.Code, got, want)
+		}
 	}
 }
