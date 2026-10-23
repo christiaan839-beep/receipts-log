@@ -287,3 +287,45 @@ func FuzzHandler(f *testing.F) {
 		}
 	})
 }
+
+// The read routes allow any origin; the write routes and /healthz do not.
+func TestReadRoutesAllowAnyOrigin(t *testing.T) {
+	f := setup(t)
+	for _, path := range []string{
+		"/v1/entries/0",
+		"/v1/sth",
+		"/v1/proof/inclusion?index=0",
+		"/v1/proof/consistency?old=0",
+		"/v1/public-key",
+		"/v1/cosignatures?treeSize=0",
+		"/api/transparency/sth",
+		"/api/transparency/proof?kind=consistency&old=0",
+	} {
+		resp, err := http.Get(f.srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Errorf("GET %s (status %d): Access-Control-Allow-Origin %q, want *", path, resp.StatusCode, got)
+		}
+	}
+	for _, path := range []string{"/v1/entries", "/v1/cosignatures", "/api/transparency/witness"} {
+		resp, err := http.Post(f.srv.URL+path, "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("POST %s: Access-Control-Allow-Origin %q, want none", path, got)
+		}
+	}
+	resp, err := http.Get(f.srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("GET /healthz: Access-Control-Allow-Origin %q, want none", got)
+	}
+}
