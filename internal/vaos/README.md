@@ -2,7 +2,7 @@
 
 `verify.go` and `transparency.go` are copies of the Go verifier in
 [verifiable-receipts](https://github.com/christiaan839-beep/verifiable-receipts)
-(`packages/verifiable-receipts-go`, commit `03b38ee2d28080a2a4aa0810dbb1dfcd447379fd`),
+(`packages/verifiable-receipts-go`, commit `732fce9d4d050a0acdaa2c004a08f57af4c5ec5c`),
 licensed Apache-2.0. The only change is a provenance notice at the top of
 each file.
 
