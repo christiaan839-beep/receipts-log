@@ -3,7 +3,6 @@
 package server
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -21,26 +20,25 @@ import (
 	"github.com/christiaan839-beep/receipts-log/internal/keys"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
 	"github.com/christiaan839-beep/receipts-log/internal/sth"
+	"github.com/christiaan839-beep/receipts-log/internal/store"
 	"github.com/christiaan839-beep/receipts-log/internal/translog"
 )
 
-// Defaults for Options.
+// Request limits (API.md, "Limits").
 const (
-	DefaultMaxInFlight   = 256
-	maxCosignatureBody   = 64 << 10
-	maxProofQueryLen     = 2048
-	defaultRequestTimout = 30 * time.Second
+	// DefaultMaxInFlight is the default of Options.MaxInFlight.
+	DefaultMaxInFlight = 256
+	maxCosignatureBody = 64 << 10
+	maxQueryLen        = 2048
 )
 
 // Options configures the handler.
 type Options struct {
-	// MaxEntryBytes bounds a POST /v1/entries body; it should match the
-	// log's entry limit.
+	// MaxEntryBytes bounds a POST /v1/entries body; 0 means
+	// store.DefaultMaxPayload. It should match the log's entry limit.
 	MaxEntryBytes int
 	// MaxInFlight bounds concurrent requests; excess requests get 503.
 	MaxInFlight int
-	// RequestTimeout bounds each handler's work.
-	RequestTimeout time.Duration
 	// Logger receives one structured line per request.
 	Logger *slog.Logger
 }
@@ -57,13 +55,10 @@ type Server struct {
 // New returns a Server for l.
 func New(l *translog.Log, opts Options) (*Server, error) {
 	if opts.MaxEntryBytes <= 0 {
-		opts.MaxEntryBytes = 1 << 20
+		opts.MaxEntryBytes = store.DefaultMaxPayload
 	}
 	if opts.MaxInFlight <= 0 {
 		opts.MaxInFlight = DefaultMaxInFlight
-	}
-	if opts.RequestTimeout <= 0 {
-		opts.RequestTimeout = defaultRequestTimout
 	}
 	logger := opts.Logger
 	if logger == nil {
@@ -177,13 +172,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			writeError(sw, http.StatusServiceUnavailable, "server is busy")
 			return
 		}
-		if len(r.URL.RawQuery) > maxProofQueryLen {
+		if len(r.URL.RawQuery) > maxQueryLen {
 			writeError(sw, http.StatusRequestURITooLong, "query string too long")
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), s.opts.RequestTimeout)
-		defer cancel()
-		next.ServeHTTP(sw, r.WithContext(ctx))
+		next.ServeHTTP(sw, r)
 	})
 }
 
@@ -243,7 +236,7 @@ func (s *Server) errorStatus(err error) (int, string) {
 	case errors.Is(err, translog.ErrReadOnly), errors.Is(err, translog.ErrFull):
 		return http.StatusServiceUnavailable, err.Error()
 	}
-	s.logger.Error("unexpected error", "err", err)
+	s.logger.Error("error has no HTTP status mapping; answering 500", "err", err)
 	return http.StatusInternalServerError, "internal error"
 }
 
@@ -251,9 +244,6 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	code, msg := s.errorStatus(err)
 	writeError(w, code, msg)
 }
-
-// sthBody is the STH wire form with its canonical string.
-func sthBody(h sth.STH) (sth.Response, error) { return sth.NewResponse(h) }
 
 type appendResponse struct {
 	Index     uint64       `json:"index"`
@@ -272,7 +262,7 @@ func (s *Server) postEntry(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	head, err := sthBody(res.STH)
+	head, err := sth.NewResponse(res.STH)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -318,7 +308,7 @@ func (s *Server) getEntry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSTH(w http.ResponseWriter, r *http.Request) {
-	head, err := sthBody(s.log.STH())
+	head, err := sth.NewResponse(s.log.STH())
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -358,7 +348,7 @@ func optionalSize(q string) (uint64, bool) {
 	return n, true
 }
 
-func (s *Server) inclusion(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getInclusion(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	size, ok := optionalSize(q.Get("treeSize"))
 	if !ok {
@@ -401,9 +391,7 @@ func (s *Server) inclusion(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) getInclusion(w http.ResponseWriter, r *http.Request) { s.inclusion(w, r) }
-
-func (s *Server) consistency(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getConsistency(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	first, ok := parseUint(q.Get("old"))
 	if !ok {
@@ -426,14 +414,12 @@ func (s *Server) consistency(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) getConsistency(w http.ResponseWriter, r *http.Request) { s.consistency(w, r) }
-
 func (s *Server) getCompatProof(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Query().Get("kind") {
 	case "consistency":
-		s.consistency(w, r)
+		s.getConsistency(w, r)
 	case "inclusion":
-		s.inclusion(w, r)
+		s.getInclusion(w, r)
 	default:
 		writeError(w, http.StatusBadRequest, "kind must be inclusion or consistency")
 	}

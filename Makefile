@@ -1,5 +1,6 @@
-# receipts-log — common tasks. `make check` runs what CI runs, except the
-# interop job, which needs a verifiable-receipts checkout (`make interop`).
+# receipts-log — common tasks. `make check` runs the checks of CI's test
+# job; CI also runs `make fuzz`, `make build`, `make interop` (which needs
+# a verifiable-receipts checkout) and a container build.
 
 GO        ?= go
 BIN       ?= dist/receipts-log

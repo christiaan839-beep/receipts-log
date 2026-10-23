@@ -17,10 +17,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/christiaan839-beep/receipts-log/internal/keys"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
@@ -159,12 +157,8 @@ func Open(cfg Config) (*Log, error) {
 		cosigCounts: make(map[string]int),
 	}
 	visitEntry := func(i uint64, leaf merkle.Hash, payload []byte) error {
-		r, err := parseReceipt(payload)
-		if err != nil {
+		if err := checkEntry(leaf, payload); err != nil {
 			return err
-		}
-		if merkle.LeafHash([]byte(r.Canonical)) != leaf {
-			return errors.New("stored leaf hash does not match the receipt's canonical")
 		}
 		l.tree.Append(leaf)
 		if _, dup := l.byLeaf[leaf]; !dup {
@@ -185,7 +179,7 @@ func Open(cfg Config) (*Log, error) {
 		return nil, err
 	}
 	l.st = st
-	if err := l.loadCheckpoint(); err != nil {
+	if err := l.loadCheckpoint(cfg.Dir); err != nil {
 		st.Close()
 		return nil, err
 	}
@@ -195,8 +189,53 @@ func Open(cfg Config) (*Log, error) {
 	return l, nil
 }
 
-func (l *Log) loadCheckpoint() error {
-	data, err := l.st.ReadCheckpoint()
+// checkEntry checks that a stored entry's leaf hash is the leaf of the
+// receipt stored with it.
+func checkEntry(leaf merkle.Hash, payload []byte) error {
+	got, err := LeafForReceipt(payload)
+	if err != nil {
+		return err
+	}
+	if got != leaf {
+		return errors.New("stored leaf hash does not match the receipt's canonical")
+	}
+	return nil
+}
+
+// parseCheckpoint decodes the contents of checkpoint.json and checks its
+// signature under pub and its log ID.
+func parseCheckpoint(data []byte, pub ed25519.PublicKey, logID string) (sth.STH, error) {
+	var ck sth.STH
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&ck); err != nil {
+		return sth.STH{}, fmt.Errorf("%w: %s: %v", store.ErrCorrupt, store.CheckpointFile, err)
+	}
+	if err := sth.Verify(ck, pub); err != nil {
+		return sth.STH{}, fmt.Errorf("%w: %s does not verify under the log key: %v",
+			store.ErrCorrupt, store.CheckpointFile, err)
+	}
+	if ck.LogID != logID {
+		return sth.STH{}, fmt.Errorf("translog: %s is for log %q, not %q", store.CheckpointFile, ck.LogID, logID)
+	}
+	return ck, nil
+}
+
+// checkCheckpointRoot checks that tree holds the checkpoint's tree size
+// and has the checkpoint's root at that size.
+func checkCheckpointRoot(ck sth.STH, tree *merkle.Tree) error {
+	if ck.TreeSize > tree.Size() {
+		return fmt.Errorf("%w: %s covers %d entries, %s holds %d",
+			store.ErrCorrupt, store.CheckpointFile, ck.TreeSize, store.EntriesFile, tree.Size())
+	}
+	if root, _ := tree.RootAt(ck.TreeSize); root.String() != ck.RootHash {
+		return fmt.Errorf("%w: the root at size %d does not match the signed checkpoint", store.ErrCorrupt, ck.TreeSize)
+	}
+	return nil
+}
+
+func (l *Log) loadCheckpoint(dir string) error {
+	data, err := store.ReadCheckpoint(dir)
 	if err != nil {
 		return err
 	}
@@ -207,25 +246,12 @@ func (l *Log) loadCheckpoint() error {
 		}
 		return l.signAndCheckpointLocked()
 	}
-	var ck sth.STH
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&ck); err != nil {
-		return fmt.Errorf("%w: %s: %v", store.ErrCorrupt, store.CheckpointFile, err)
+	ck, err := parseCheckpoint(data, l.pub, l.id)
+	if err != nil {
+		return err
 	}
-	if err := sth.Verify(ck, l.pub); err != nil {
-		return fmt.Errorf("%w: %s does not verify under the configured log key: %v",
-			store.ErrCorrupt, store.CheckpointFile, err)
-	}
-	if ck.LogID != l.id {
-		return fmt.Errorf("translog: data directory belongs to log %q, not %q", ck.LogID, l.id)
-	}
-	if ck.TreeSize > size {
-		return fmt.Errorf("%w: checkpoint covers %d entries, store has %d", store.ErrCorrupt, ck.TreeSize, size)
-	}
-	root, _ := l.tree.RootAt(ck.TreeSize)
-	if root.String() != ck.RootHash {
-		return fmt.Errorf("%w: rebuilt root at size %d does not match the signed checkpoint", store.ErrCorrupt, ck.TreeSize)
+	if err := checkCheckpointRoot(ck, &l.tree); err != nil {
+		return err
 	}
 	l.head = ck
 	if ck.TreeSize < size {
@@ -264,6 +290,9 @@ func (l *Log) signAndCheckpointLocked() error {
 	return nil
 }
 
+// parseReceipt decodes a receipt and requires a canonical string. The
+// decoder replaces invalid UTF-8 with U+FFFD, so the canonical is valid
+// UTF-8.
 func parseReceipt(body []byte) (vaos.Receipt, error) {
 	var r vaos.Receipt
 	if err := json.Unmarshal(body, &r); err != nil {
@@ -271,9 +300,6 @@ func parseReceipt(body []byte) (vaos.Receipt, error) {
 	}
 	if r.Canonical == "" {
 		return r, fmt.Errorf("%w: missing canonical", ErrInvalidReceipt)
-	}
-	if !utf8.ValidString(r.Canonical) {
-		return r, fmt.Errorf("%w: canonical is not valid UTF-8", ErrInvalidReceipt)
 	}
 	return r, nil
 }
@@ -485,21 +511,14 @@ func (l *Log) addCosigLocked(c Cosignature) {
 	l.cosigCounts[c.STHCanonical]++
 }
 
-func validLabel(s string, max int) bool {
-	if s == "" || len(s) > max || !utf8.ValidString(s) {
-		return false
-	}
-	return !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
-}
-
 // AddCosignature records a witness's signature over one of this log's
 // tree heads. It returns the number of distinct witnesses that have
 // cosigned that tree head and whether this call added a record.
 func (l *Log) AddCosignature(witnessID, canonical, signature, publicKeyURL string) (int, bool, error) {
-	if !validLabel(witnessID, 256) {
+	if !sth.ValidLabel(witnessID, 256) {
 		return 0, false, fmt.Errorf("%w: witnessId", ErrInvalidCosig)
 	}
-	if publicKeyURL != "" && !validLabel(publicKeyURL, 2048) {
+	if publicKeyURL != "" && !sth.ValidLabel(publicKeyURL, 2048) {
 		return 0, false, fmt.Errorf("%w: publicKeyUrl", ErrInvalidCosig)
 	}
 	pub, ok := l.witnesses[witnessID]

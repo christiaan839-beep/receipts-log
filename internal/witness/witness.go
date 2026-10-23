@@ -12,7 +12,6 @@
 package witness
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -24,9 +23,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/christiaan839-beep/receipts-log/internal/logclient"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
 	"github.com/christiaan839-beep/receipts-log/internal/sth"
 	"github.com/christiaan839-beep/receipts-log/internal/store"
@@ -38,8 +37,6 @@ const (
 	NoChange  = "no-change"
 	Fork      = "fork-detected"
 )
-
-const maxResponse = 1 << 20
 
 // Config configures a witness.
 type Config struct {
@@ -128,103 +125,16 @@ func SaveState(path string, s State) error {
 	return store.WriteFileAtomic(dir, filepath.Base(path), append(data, '\n'))
 }
 
-type client struct {
-	base *url.URL
-	http *http.Client
-}
-
-func (c *client) get(ctx context.Context, path string, q url.Values, out any) error {
-	u := *c.base
-	u.Path = strings.TrimSuffix(u.Path, "/") + path
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	return c.do(req, out)
-}
-
-func (c *client) post(ctx context.Context, path string, body, out any) error {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	u := *c.base
-	u.Path = strings.TrimSuffix(u.Path, "/") + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	return c.do(req, out)
-}
-
-func (c *client) do(req *http.Request, out any) error {
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
-	if err != nil {
-		return err
-	}
-	if len(data) > maxResponse {
-		return fmt.Errorf("%s %s: response larger than %d bytes", req.Method, req.URL.Path, maxResponse)
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg := strings.TrimSpace(string(data))
-		if len(msg) > 200 {
-			msg = msg[:200]
-		}
-		return fmt.Errorf("%s %s: HTTP %d %s", req.Method, req.URL.Path, resp.StatusCode, msg)
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("%s %s: malformed response: %v", req.Method, req.URL.Path, err)
-	}
-	return nil
-}
-
-// FetchSTH fetches and verifies the log's latest tree head.
-func FetchSTH(ctx context.Context, hc *http.Client, baseURL string, logKey ed25519.PublicKey) (sth.STH, []byte, error) {
-	c, err := newClient(baseURL, hc)
-	if err != nil {
-		return sth.STH{}, nil, err
-	}
-	return c.fetchSTH(ctx, logKey)
-}
-
-func newClient(baseURL string, hc *http.Client) (*client, error) {
-	u, err := url.Parse(baseURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("witness: %q is not an http(s) URL", baseURL)
-	}
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &client{base: u, http: hc}, nil
-}
-
-func (c *client) fetchSTH(ctx context.Context, logKey ed25519.PublicKey) (sth.STH, []byte, error) {
-	var resp sth.Response
-	if err := c.get(ctx, "/api/transparency/sth", nil, &resp); err != nil {
-		return sth.STH{}, nil, err
-	}
-	head := resp.STH
-	if err := sth.Verify(head, logKey); err != nil {
-		return sth.STH{}, nil, fmt.Errorf("witness: tree head rejected: %w", err)
-	}
-	canonical, _ := head.Canonical()
-	if resp.Canonical != "" && resp.Canonical != string(canonical) {
-		return sth.STH{}, nil, errors.New("witness: the log's canonical string does not match its tree head")
-	}
-	return head, canonical, nil
-}
-
 type proofResponse struct {
 	Proof []string `json:"proof"`
+}
+
+// cosignRequest is the body of POST /api/transparency/witness.
+type cosignRequest struct {
+	WitnessID    string `json:"witnessId"`
+	Signature    string `json:"signature"`
+	STHCanonical string `json:"sthCanonical"`
+	PublicKeyURL string `json:"publicKeyUrl,omitempty"`
 }
 
 // RunOnce performs one witness check.
@@ -239,7 +149,7 @@ func RunOnce(ctx context.Context, cfg Config) (Result, error) {
 	if now == nil {
 		now = time.Now
 	}
-	c, err := newClient(cfg.BaseURL, cfg.Client)
+	c, err := logclient.New(cfg.BaseURL, cfg.Client)
 	if err != nil {
 		return Result{}, err
 	}
@@ -247,7 +157,7 @@ func RunOnce(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	head, canonical, err := c.fetchSTH(ctx, cfg.LogKey)
+	head, canonical, err := c.FetchSTH(ctx, cfg.LogKey)
 	if err != nil {
 		return Result{}, err
 	}
@@ -274,7 +184,7 @@ func RunOnce(ctx context.Context, cfg Config) (Result, error) {
 		var p proofResponse
 		q := url.Values{"kind": {"consistency"}, "old": {strconv.FormatUint(state.LastSize, 10)},
 			"new": {strconv.FormatUint(head.TreeSize, 10)}}
-		if err := c.get(ctx, "/api/transparency/proof", q, &p); err != nil {
+		if err := c.Get(ctx, "/api/transparency/proof", q, &p); err != nil {
 			return res, err
 		}
 		if p.Proof == nil {
@@ -294,15 +204,16 @@ func RunOnce(ctx context.Context, cfg Config) (Result, error) {
 	var sub struct {
 		WitnessCount int `json:"witnessCount"`
 	}
-	body := map[string]string{
-		"witnessId":    cfg.WitnessID,
-		"signature":    sth.EncodeSignature(ed25519.Sign(cfg.Key, canonical)),
-		"sthCanonical": string(canonical),
+	body, err := json.Marshal(cosignRequest{
+		WitnessID:    cfg.WitnessID,
+		Signature:    sth.EncodeSignature(ed25519.Sign(cfg.Key, canonical)),
+		STHCanonical: string(canonical),
+		PublicKeyURL: cfg.PublicKeyURL,
+	})
+	if err != nil {
+		return res, err
 	}
-	if cfg.PublicKeyURL != "" {
-		body["publicKeyUrl"] = cfg.PublicKeyURL
-	}
-	if err := c.post(ctx, "/api/transparency/witness", body, &sub); err != nil {
+	if err := c.Post(ctx, "/api/transparency/witness", body, &sub); err != nil {
 		return res, err
 	}
 	// The log accepted the cosignature: this head is now the reference

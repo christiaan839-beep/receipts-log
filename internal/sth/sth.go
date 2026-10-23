@@ -74,16 +74,20 @@ func New(logID string, size uint64, root merkle.Hash, at time.Time) STH {
 // FormatTime formats t as JavaScript's toISOString does.
 func FormatTime(t time.Time) string { return t.UTC().Format(TimeLayout) }
 
-// ValidateLogID checks a log identifier: non-empty, at most MaxLogIDLen
-// bytes, valid UTF-8 and free of control characters.
-func ValidateLogID(id string) error {
-	if id == "" || len(id) > MaxLogIDLen || !utf8.ValidString(id) {
-		return fmt.Errorf("%w: logId must be 1-%d bytes of UTF-8", ErrInvalid, MaxLogIDLen)
+// ValidLabel reports whether s is 1 to max bytes of valid UTF-8 with no
+// control character (U+0000-U+001F, U+007F): the rule for log and
+// witness identifiers.
+func ValidLabel(s string, max int) bool {
+	if s == "" || len(s) > max || !utf8.ValidString(s) {
+		return false
 	}
-	for _, r := range id {
-		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("%w: logId contains a control character", ErrInvalid)
-		}
+	return !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
+}
+
+// ValidateLogID checks a log identifier with ValidLabel and MaxLogIDLen.
+func ValidateLogID(id string) error {
+	if !ValidLabel(id, MaxLogIDLen) {
+		return fmt.Errorf("%w: logId must be 1-%d bytes of UTF-8 without control characters", ErrInvalid, MaxLogIDLen)
 	}
 	return nil
 }
@@ -111,14 +115,8 @@ func (s STH) Validate() error {
 	return nil
 }
 
-// Root decodes the root hash. It requires lowercase hex, the form every
-// reference implementation emits and compares.
-func (s STH) Root() (merkle.Hash, error) {
-	if strings.ToLower(s.RootHash) != s.RootHash {
-		return merkle.Hash{}, errors.New("rootHash must be lowercase hex")
-	}
-	return merkle.ParseHash(s.RootHash)
-}
+// Root decodes the root hash, which must be 64 lowercase hex digits.
+func (s STH) Root() (merkle.Hash, error) { return merkle.ParseHash(s.RootHash) }
 
 // Canonical returns the signing input. It fails when a string field is
 // not valid UTF-8 (JavaScript could not produce the same bytes).

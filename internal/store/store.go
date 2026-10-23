@@ -277,12 +277,10 @@ func Scan(r io.ReaderAt, size int64, maxPayload int, minCount uint64, visit Visi
 		if _, err := io.ReadFull(br, buf); err != nil {
 			return res, err
 		}
-		crc := crc32.Update(crc32.Checksum(hdr[:], castagnoli), castagnoli, buf[:n])
-		if crc != binary.BigEndian.Uint32(buf[n:]) {
+		leaf, ok := checkRecord(&hdr, buf)
+		if !ok {
 			return damaged("checksum mismatch")
 		}
-		var leaf merkle.Hash
-		copy(leaf[:], hdr[4:])
 		if visit != nil {
 			if err := visit(index, leaf, buf[:n:n]); err != nil {
 				return res, fmt.Errorf("%w: entry %d: %v", ErrCorrupt, index, err)
@@ -298,6 +296,16 @@ func Scan(r io.ReaderAt, size int64, maxPayload int, minCount uint64, visit Visi
 	return res, nil
 }
 
+// checkRecord checks the CRC of the record with header hdr and body buf
+// (payload then CRC) and returns its leaf hash.
+func checkRecord(hdr *[headerSize]byte, buf []byte) (merkle.Hash, bool) {
+	n := len(buf) - trailerSize
+	crc := crc32.Update(crc32.Checksum(hdr[:], castagnoli), castagnoli, buf[:n])
+	var leaf merkle.Hash
+	copy(leaf[:], hdr[4:])
+	return leaf, crc == binary.BigEndian.Uint32(buf[n:])
+}
+
 // EncodeRecord returns the on-disk form of one entry.
 func EncodeRecord(leaf merkle.Hash, payload []byte) []byte {
 	buf := make([]byte, headerSize+len(payload)+trailerSize)
@@ -311,9 +319,6 @@ func EncodeRecord(leaf merkle.Hash, payload []byte) []byte {
 
 // Count returns the number of stored entries.
 func (s *Store) Count() uint64 { return uint64(len(s.offsets)) }
-
-// MaxPayload returns the largest accepted payload.
-func (s *Store) MaxPayload() int { return s.maxPayload }
 
 // Append writes one entry durably and returns its index. After any
 // write or fsync error the store refuses further appends.
@@ -359,18 +364,16 @@ func (s *Store) Read(i uint64) (merkle.Hash, []byte, error) {
 	if _, err := s.f.ReadAt(buf, off+headerSize); err != nil {
 		return merkle.Hash{}, nil, err
 	}
-	crc := crc32.Update(crc32.Checksum(hdr[:], castagnoli), castagnoli, buf[:n])
-	if crc != binary.BigEndian.Uint32(buf[n:]) {
+	leaf, ok := checkRecord(&hdr, buf)
+	if !ok {
 		return merkle.Hash{}, nil, fmt.Errorf("%w: entry %d checksum", ErrCorrupt, i)
 	}
-	var leaf merkle.Hash
-	copy(leaf[:], hdr[4:])
 	return leaf, buf[:n:n], nil
 }
 
 // checkpointSize returns the tree size recorded in checkpoint.json.
 func (s *Store) checkpointSize() (uint64, bool, error) {
-	data, err := s.ReadCheckpoint()
+	data, err := ReadCheckpoint(s.dir)
 	if err != nil || data == nil {
 		return 0, false, err
 	}
@@ -383,10 +386,10 @@ func (s *Store) checkpointSize() (uint64, bool, error) {
 	return *ck.TreeSize, true, nil
 }
 
-// ReadCheckpoint returns the contents of checkpoint.json, or nil if it
-// does not exist.
-func (s *Store) ReadCheckpoint() ([]byte, error) {
-	f, err := os.Open(filepath.Join(s.dir, CheckpointFile))
+// ReadCheckpoint returns the contents of dir/checkpoint.json, or nil if
+// it does not exist. It does not need the store to be open.
+func ReadCheckpoint(dir string) ([]byte, error) {
+	f, err := os.Open(filepath.Join(dir, CheckpointFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

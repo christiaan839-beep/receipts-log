@@ -94,9 +94,6 @@ func splitPoint(n uint64) uint64 {
 	return uint64(1) << (bits.Len64(n-1) - 1)
 }
 
-// ErrSize is returned when a requested index or size is outside the tree.
-var ErrSize = errors.New("merkle: index or size out of range")
-
 // Tree is an append-only Merkle tree held in memory. It stores every
 // complete, aligned subtree hash (about 2n hashes for n leaves), so a
 // root or proof at any size costs O(log² n) node hashes at most.
@@ -134,7 +131,7 @@ func (t *Tree) Append(leaf Hash) uint64 {
 // Leaf returns the leaf hash at index i.
 func (t *Tree) Leaf(i uint64) (Hash, error) {
 	if i >= t.Size() {
-		return Hash{}, ErrSize
+		return Hash{}, ErrRange
 	}
 	return t.levels[0][i], nil
 }
@@ -161,7 +158,7 @@ func (t *Tree) Root() Hash {
 // RootAt returns the root of the tree formed by the first n leaves.
 func (t *Tree) RootAt(n uint64) (Hash, error) {
 	if n > t.Size() {
-		return Hash{}, ErrSize
+		return Hash{}, ErrRange
 	}
 	if n == 0 {
 		return EmptyRoot(), nil
@@ -173,7 +170,7 @@ func (t *Tree) RootAt(n uint64) (Hash, error) {
 // the given size (RFC 9162 §2.1.3.1).
 func (t *Tree) InclusionProof(index, size uint64) ([]Hash, error) {
 	if size > t.Size() || index >= size {
-		return nil, ErrSize
+		return nil, ErrRange
 	}
 	return t.path(index, 0, size, make([]Hash, 0, bits.Len64(size))), nil
 }
@@ -197,7 +194,7 @@ func (t *Tree) path(m, lo, hi uint64, out []Hash) []Hash {
 // empty when first is 0 or first equals second.
 func (t *Tree) ConsistencyProof(first, second uint64) ([]Hash, error) {
 	if second > t.Size() || first > second {
-		return nil, ErrSize
+		return nil, ErrRange
 	}
 	if first == 0 || first == second {
 		return []Hash{}, nil

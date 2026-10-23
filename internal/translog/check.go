@@ -1,16 +1,12 @@
 package translog
 
 import (
-	"bytes"
 	"crypto/ed25519"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
-	"github.com/christiaan839-beep/receipts-log/internal/sth"
 	"github.com/christiaan839-beep/receipts-log/internal/store"
 )
 
@@ -23,27 +19,23 @@ type CheckReport struct {
 	TornTailBytes  int64  `json:"tornTailBytes"`
 }
 
-// Check verifies a data directory without modifying it: every entry's
-// checksum and leaf hash, and the checkpoint's signature (under pub),
-// log ID and root. A damaged tail past the checkpoint is reported, not
-// repaired; the server truncates it when it next opens the directory.
+// Check verifies a data directory without modifying it, as Open does:
+// every entry's checksum and leaf hash, and the checkpoint's signature
+// (under pub), log ID and root. A damaged tail past the checkpoint is
+// reported, not repaired; the server truncates it when it next opens the
+// directory.
 func Check(dir, logID string, pub ed25519.PublicKey) (CheckReport, error) {
 	var rep CheckReport
-	ckData, err := os.ReadFile(filepath.Join(dir, store.CheckpointFile))
+	data, err := store.ReadCheckpoint(dir)
 	if err != nil {
-		return rep, fmt.Errorf("read checkpoint: %w", err)
+		return rep, err
 	}
-	var ck sth.STH
-	dec := json.NewDecoder(bytes.NewReader(ckData))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&ck); err != nil {
-		return rep, fmt.Errorf("%w: checkpoint: %v", store.ErrCorrupt, err)
+	if data == nil {
+		return rep, fmt.Errorf("%w: %s has no %s", store.ErrCorrupt, dir, store.CheckpointFile)
 	}
-	if err := sth.Verify(ck, pub); err != nil {
-		return rep, fmt.Errorf("%w: checkpoint signature: %v", store.ErrCorrupt, err)
-	}
-	if ck.LogID != logID {
-		return rep, fmt.Errorf("checkpoint is for log %q, not %q", ck.LogID, logID)
+	ck, err := parseCheckpoint(data, pub, logID)
+	if err != nil {
+		return rep, err
 	}
 	f, err := os.Open(filepath.Join(dir, store.EntriesFile))
 	if err != nil {
@@ -55,13 +47,9 @@ func Check(dir, logID string, pub ed25519.PublicKey) (CheckReport, error) {
 		return rep, err
 	}
 	var tree merkle.Tree
-	res, err := store.Scan(f, st.Size(), store.HardMaxPayload, ck.TreeSize, func(i uint64, leaf merkle.Hash, payload []byte) error {
-		r, err := parseReceipt(payload)
-		if err != nil {
+	res, err := store.Scan(f, st.Size(), store.HardMaxPayload, ck.TreeSize, func(_ uint64, leaf merkle.Hash, payload []byte) error {
+		if err := checkEntry(leaf, payload); err != nil {
 			return err
-		}
-		if merkle.LeafHash([]byte(r.Canonical)) != leaf {
-			return errors.New("leaf hash does not match the receipt's canonical")
 		}
 		tree.Append(leaf)
 		return nil
@@ -76,11 +64,5 @@ func Check(dir, logID string, pub ed25519.PublicKey) (CheckReport, error) {
 	if res.TornAt >= 0 {
 		rep.TornTailBytes = st.Size() - res.TornAt
 	}
-	if tree.Size() < ck.TreeSize {
-		return rep, fmt.Errorf("%w: %d entries, checkpoint covers %d", store.ErrCorrupt, tree.Size(), ck.TreeSize)
-	}
-	if root, _ := tree.RootAt(ck.TreeSize); root.String() != ck.RootHash {
-		return rep, fmt.Errorf("%w: root at size %d does not match the checkpoint", store.ErrCorrupt, ck.TreeSize)
-	}
-	return rep, nil
+	return rep, checkCheckpointRoot(ck, &tree)
 }

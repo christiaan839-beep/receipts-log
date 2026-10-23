@@ -18,23 +18,29 @@ import (
 	"os"
 )
 
-// MaxPEMSize bounds every key file read.
-const MaxPEMSize = 64 << 10
+// maxKeyFile bounds every key file read.
+const maxKeyFile = 64 << 10
 
-func readSmall(path string) ([]byte, error) {
+// readKeyFile reads a key file of at most maxKeyFile bytes and returns
+// it with the file's permission bits, both from one open file.
+func readKeyFile(path string) ([]byte, os.FileMode, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, MaxPEMSize+1))
+	st, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if len(data) > MaxPEMSize {
-		return nil, fmt.Errorf("keys: %s is larger than %d bytes", path, MaxPEMSize)
+	data, err := io.ReadAll(io.LimitReader(f, maxKeyFile+1))
+	if err != nil {
+		return nil, 0, err
 	}
-	return data, nil
+	if len(data) > maxKeyFile {
+		return nil, 0, fmt.Errorf("keys: %s is larger than %d bytes", path, maxKeyFile)
+	}
+	return data, st.Mode().Perm(), nil
 }
 
 // ParsePrivateKeyPEM parses a PKCS #8 PEM Ed25519 private key.
@@ -74,11 +80,7 @@ func ParsePublicKeyPEM(data []byte) (ed25519.PublicKey, error) {
 // LoadPrivateKey reads a PKCS #8 PEM Ed25519 private key from path. It
 // reports in insecure whether the file is readable by group or others.
 func LoadPrivateKey(path string) (key ed25519.PrivateKey, insecure bool, err error) {
-	st, err := os.Stat(path)
-	if err != nil {
-		return nil, false, err
-	}
-	data, err := readSmall(path)
+	data, perm, err := readKeyFile(path)
 	if err != nil {
 		return nil, false, err
 	}
@@ -86,12 +88,12 @@ func LoadPrivateKey(path string) (key ed25519.PrivateKey, insecure bool, err err
 	if err != nil {
 		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
-	return key, st.Mode().Perm()&0o077 != 0, nil
+	return key, perm&0o077 != 0, nil
 }
 
 // LoadPublicKey reads an SPKI PEM Ed25519 public key from path.
 func LoadPublicKey(path string) (ed25519.PublicKey, error) {
-	data, err := readSmall(path)
+	data, _, err := readKeyFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -102,8 +104,8 @@ func LoadPublicKey(path string) (ed25519.PublicKey, error) {
 	return k, nil
 }
 
-// PrivateKeyPEM encodes key as PKCS #8 PEM.
-func PrivateKeyPEM(key ed25519.PrivateKey) ([]byte, error) {
+// privateKeyPEM encodes key as PKCS #8 PEM.
+func privateKeyPEM(key ed25519.PrivateKey) ([]byte, error) {
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return nil, err
@@ -138,7 +140,7 @@ func Generate(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := PrivateKeyPEM(key)
+	data, err := privateKeyPEM(key)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +159,7 @@ func Generate(path string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	if err := f.Close(); err != nil {
+		os.Remove(path)
 		return nil, err
 	}
 	return key, nil
