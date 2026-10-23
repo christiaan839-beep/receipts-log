@@ -1,8 +1,8 @@
 // Copied from github.com/christiaan839-beep/verifiable-receipts,
 // packages/verifiable-receipts-go/verify.go at commit
-// 55d30b72b277a025e7a20e0952aa5813241ba38f (Apache-2.0, Copyright 2026
-// Christiaan de Wet / Sovereign Matrix). Changed: this notice added, and
-// the signature's base64 is decoded strictly (see internal/vaos/README.md).
+// a5637ee5feeb6ef241b99479922f123ea761b5d3 (Apache-2.0, Copyright 2026
+// Christiaan de Wet / Sovereign Matrix). Changed: this notice added; the
+// code below is otherwise unchanged. See internal/vaos/README.md.
 
 // Package vaos verifies VAOS 2.0 receipts (Ed25519) and RFC 9162
 // transparency-log inclusion proofs, using only the Go standard library.
@@ -149,11 +149,16 @@ func VerifyV2Receipt(r Receipt, pub ed25519.PublicKey) VerifyResult {
 	if !strings.HasPrefix(r.Signature, "v2=") {
 		return VerifyResult{OK: false, Reason: "signature is not v2 (expected 'v2=<base64>')"}
 	}
-	// Strict: reject non-zero padding bits, so one signature has
-	// exactly one valid string form.
-	sigBytes, err := base64.StdEncoding.Strict().DecodeString(r.Signature[3:])
+	// One signature has exactly one valid string form: Strict rejects
+	// non-zero padding bits, and the re-encoding check rejects what the
+	// decoder skips even in strict mode (CR and LF anywhere in the input).
+	sigText := r.Signature[3:]
+	sigBytes, err := base64.StdEncoding.Strict().DecodeString(sigText)
 	if err != nil {
 		return VerifyResult{OK: false, Reason: "signature base64 invalid: " + err.Error()}
+	}
+	if base64.StdEncoding.EncodeToString(sigBytes) != sigText {
+		return VerifyResult{OK: false, Reason: "signature base64 invalid: not canonical padded standard base64"}
 	}
 
 	canonicalBytes := []byte(r.Canonical)

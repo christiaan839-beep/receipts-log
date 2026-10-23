@@ -1,6 +1,6 @@
 // Copied from github.com/christiaan839-beep/verifiable-receipts,
 // packages/verifiable-receipts-go/transparency.go at commit
-// 55d30b72b277a025e7a20e0952aa5813241ba38f (Apache-2.0, Copyright 2026
+// a5637ee5feeb6ef241b99479922f123ea761b5d3 (Apache-2.0, Copyright 2026
 // Christiaan de Wet / Sovereign Matrix). Changed: this notice added; the
 // code below is otherwise unchanged. See internal/vaos/README.md.
 
