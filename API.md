@@ -75,7 +75,7 @@ optional), so `""` is refused with 422.
 | Status | Meaning |
 | --- | --- |
 | 201 | Appended |
-| 200 | Already logged (same `canonical`); the existing entry is returned |
+| 200 | Already logged (same `canonical`); the first entry logged for that `canonical` is returned, and its `contentHash` may differ from the submitted one |
 | 400 | Not a JSON object, no `canonical`, or a `canonical`, `contentHash` or `signature` that is neither a string nor `null` |
 | 413 | Body too large |
 | 415 | Content type other than `application/json` |

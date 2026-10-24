@@ -22,7 +22,9 @@ as a string, even `""`, against the canonical's hash; an absent or `null`
 `contentHash` is not checked. `Receipt.UnmarshalJSON` records which it read,
 so the log must pass the parsed `Receipt` itself to the verifier, not one
 built by hand. The fixtures `v2-invalid-empty-contenthash.json` and
-`v2-valid-null-contenthash.json` cover it.
+`v2-valid-null-contenthash.json` cover it, and `contenthash_test.go`, copied
+from the same commit with the same notice, checks the rule through a JSON
+round trip; `fixtures_test.go` points it at this repository's fixtures.
 
 The log server uses `VerifyV2Receipt` and `VerifyGuardianAttestation` to admit
 receipts, so admission follows the published verifier's rules. The tests use
