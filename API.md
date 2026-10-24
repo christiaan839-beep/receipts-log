@@ -68,14 +68,18 @@ verifiable-receipts' `VerifyV2Receipt` (Ed25519 `v2=` signature over
 same field in the parsed canonical) or `VerifyGuardianAttestation`. The entry is
 written durably and a new STH is signed before the response is sent.
 
+A `contentHash` that is absent or `null` is not checked. Any other value must
+be a string equal to `sha256:` + the hex SHA-256 of `canonical` (the prefix is
+optional), so `""` is refused with 422.
+
 | Status | Meaning |
 | --- | --- |
 | 201 | Appended |
-| 200 | Already logged (same `canonical`); the existing entry is returned |
-| 400 | Not a JSON object, no `canonical`, or a `canonical`, `contentHash` or `signature` that is not a string |
+| 200 | Already logged (same `canonical`); the first entry logged for that `canonical` is returned, and its `contentHash` may differ from the submitted one |
+| 400 | Not a JSON object, no `canonical`, or a `canonical`, `contentHash` or `signature` that is neither a string nor `null` |
 | 413 | Body too large |
 | 415 | Content type other than `application/json` |
-| 422 | Signature does not verify under any issuer key (the reason is in `error`) |
+| 422 | Signature does not verify under any issuer key, or `contentHash` is a string that is not the canonical's hash, `""` included (the reason is in `error`) |
 | 503 | The log is read-only after a storage failure, holds 2^53 − 1 entries, or is busy |
 
 ```json

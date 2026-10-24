@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -397,5 +399,66 @@ func TestPanicAllowsAnyOriginOnReadRoutes(t *testing.T) {
 		if got := rec.Header().Get("Access-Control-Allow-Origin"); rec.Code != 500 || got != want {
 			t.Errorf("read %v: %d, Access-Control-Allow-Origin %q, want 500 and %q", read, rec.Code, got, want)
 		}
+	}
+}
+
+// contentHashServer serves a log whose issuer is the conformance key, and
+// returns the receipt of the named conformance fixture.
+func contentHashServer(t *testing.T, name string) (*fixture, []byte) {
+	t.Helper()
+	pub, err := keys.LoadPublicKey("../../testdata/conformance/public-key.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := translog.Open(translog.Config{
+		Dir: t.TempDir(), LogID: "test-log", Key: testutil.Key(t),
+		IssuerKeys: []ed25519.PublicKey{pub},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(l, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(func() { srv.Close(); l.Close() })
+	raw, err := os.ReadFile(filepath.Join("../../testdata/conformance/fixtures", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx struct {
+		Receipt json.RawMessage `json:"receipt"`
+	}
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatal(err)
+	}
+	return &fixture{srv: srv, log: l}, fx.Receipt
+}
+
+// A present contentHash must be the canonical's hash, even when it is "":
+// a correctly signed receipt with "contentHash": "" is refused.
+func TestEntriesRefuseEmptyContentHash(t *testing.T) {
+	f, receipt := contentHashServer(t, "v2-invalid-empty-contenthash.json")
+	code, body := f.do(t, "POST", "/v1/entries", receipt)
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("contentHash \"\": got %d, want 422 (%s)", code, body)
+	}
+	if !strings.Contains(string(body), "contentHash mismatch") {
+		t.Errorf("error does not name the contentHash: %s", body)
+	}
+	if f.log.STH().TreeSize != 0 {
+		t.Fatal("the receipt was appended")
+	}
+}
+
+// A null contentHash is no hash, as if the key were absent.
+func TestEntriesAdmitNullContentHash(t *testing.T) {
+	f, receipt := contentHashServer(t, "v2-valid-null-contenthash.json")
+	if code, body := f.do(t, "POST", "/v1/entries", receipt); code != http.StatusCreated {
+		t.Fatalf("contentHash null: got %d, want 201 (%s)", code, body)
+	}
+	if f.log.STH().TreeSize != 1 {
+		t.Fatal("the receipt was not appended")
 	}
 }

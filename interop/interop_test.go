@@ -54,6 +54,8 @@ func checkout(t *testing.T) string {
 func runTool(t *testing.T, stdin []byte, name string, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command(name, args...)
+	// The tool's temporary files go in a directory the test removes.
+	cmd.Env = append(os.Environ(), "TMPDIR="+t.TempDir())
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -399,6 +401,7 @@ func TestTypeScriptWitnessAgainstThisLog(t *testing.T) {
 	witnessRun := func() (int, map[string]any) {
 		cmd := exec.Command("bash", "run-ts-witness.sh", repo, "--url", srv.URL, "--key", ks.wTSPath,
 			"--witness-id", "w-ts", "--state", state, "--once", "--json")
+		cmd.Env = append(os.Environ(), "TMPDIR="+t.TempDir())
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()
@@ -451,6 +454,9 @@ func TestGoWitnessAgainstTypeScriptLog(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", "ts-log-server.mjs", repo, ks.logPath, "ts-log")
+	// Cancelling kills the server, so its exit hook cannot remove its
+	// temporary files; they go in a directory the test removes.
+	cmd.Env = append(os.Environ(), "TMPDIR="+t.TempDir())
 	stdout, _ := cmd.StdoutPipe()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -517,8 +523,8 @@ func TestGoWitnessAgainstTypeScriptLog(t *testing.T) {
 }
 
 // TestFixturesAndVerifierCopiesMatchCheckout: the conformance fixtures in
-// testdata/ and the verifier copied into internal/vaos are byte-identical
-// to the checkout's.
+// testdata/ and the verifier and tests copied into internal/vaos are
+// byte-identical to the checkout's.
 func TestFixturesAndVerifierCopiesMatchCheckout(t *testing.T) {
 	repo := checkout(t)
 	src := filepath.Join(repo, "packages/verifiable-receipts/conformance/fixtures")
@@ -538,7 +544,7 @@ func TestFixturesAndVerifierCopiesMatchCheckout(t *testing.T) {
 	if !bytes.Equal(a, b) {
 		t.Error("public-key.pem differs")
 	}
-	for _, name := range []string{"verify.go", "transparency.go"} {
+	for _, name := range []string{"verify.go", "transparency.go", "contenthash_test.go"} {
 		orig, _ := os.ReadFile(filepath.Join(repo, "packages/verifiable-receipts-go", name))
 		copied, _ := os.ReadFile(filepath.Join("../internal/vaos", name))
 		i := bytes.Index(copied, []byte("\n\n"))
