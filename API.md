@@ -70,7 +70,9 @@ written durably and a new STH is signed before the response is sent.
 
 A `contentHash` that is absent or `null` is not checked. Any other value must
 be a string equal to `sha256:` + the hex SHA-256 of `canonical` (the prefix is
-optional), so `""` is refused with 422.
+optional), so `""` is refused with 422. A log run by an older build may
+hold receipts admitted before this rule; `receipts-log check -issuer-key` lists
+them (see the README).
 
 | Status | Meaning |
 | --- | --- |

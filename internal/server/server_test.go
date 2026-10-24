@@ -462,3 +462,37 @@ func TestEntriesAdmitNullContentHash(t *testing.T) {
 		t.Fatal("the receipt was not appended")
 	}
 }
+
+// A Guardian attestation signs only {ruleId, verdict, reason} of each
+// rule and not totalMs; the envelope may carry more. Admission accepts
+// it when the projection agrees with the canonical, and refuses it
+// (422) when it does not.
+func TestEntriesAdmitGuardianAttestation(t *testing.T) {
+	f := setup(t)
+	signed := testutil.Receipt(t, f.issuer, map[string]any{
+		"runId": "guardian-1", "overall": "pass",
+		"rules": []any{
+			map[string]any{"ruleId": "r1", "verdict": "pass", "reason": "ok"},
+			map[string]any{"ruleId": "r2", "verdict": "pass", "reason": "fine"},
+		},
+	})
+	attestation := func(verdict string) []byte {
+		var m map[string]any
+		if err := json.Unmarshal(signed, &m); err != nil {
+			t.Fatal(err)
+		}
+		m["totalMs"] = 42
+		m["rules"] = []any{
+			map[string]any{"ruleId": "r2", "verdict": "pass", "reason": "fine", "durationMs": 30},
+			map[string]any{"ruleId": "r1", "verdict": verdict, "reason": "ok", "durationMs": 12},
+		}
+		out, _ := json.Marshal(m)
+		return out
+	}
+	if code, body := f.do(t, "POST", "/v1/entries", attestation("fail")); code != http.StatusUnprocessableEntity {
+		t.Fatalf("disagreeing attestation: got %d, want 422 (%s)", code, body)
+	}
+	if code, body := f.do(t, "POST", "/v1/entries", attestation("pass")); code != http.StatusCreated {
+		t.Fatalf("attestation: got %d, want 201 (%s)", code, body)
+	}
+}
