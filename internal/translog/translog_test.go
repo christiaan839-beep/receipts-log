@@ -2,11 +2,14 @@ package translog
 
 import (
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -163,14 +166,38 @@ func TestRejectsBadReceipts(t *testing.T) {
 }
 
 type fixture struct {
-	Receipt  json.RawMessage `json:"receipt"`
-	Expected struct {
-		OK bool `json:"ok"`
+	Receipt json.RawMessage `json:"receipt"`
+	// ReceiptText is a receipt given as JSON text, admitted as sent.
+	ReceiptText string `json:"receiptText"`
+	// PublicKeyPem is the fixture's own issuer key, used instead of
+	// public-key.pem. It is parsed without keys.ParsePublicKeyPEM, which
+	// refuses weak keys, so the log itself meets the key.
+	PublicKeyPem string `json:"publicKeyPem"`
+	Expected     struct {
+		OK             bool   `json:"ok"`
+		ReasonContains string `json:"reasonContains"`
 	} `json:"expected"`
 }
 
+// fixtureKey parses a fixture's publicKeyPem as it is, weak or not.
+func fixtureKey(t *testing.T, text string) ed25519.PublicKey {
+	t.Helper()
+	block, _ := pem.Decode([]byte(text))
+	if block == nil {
+		t.Fatal("publicKeyPem: no PEM block")
+	}
+	k, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("publicKeyPem: %v", err)
+	}
+	return k.(ed25519.PublicKey)
+}
+
 // The v2 fixtures of the verifiable-receipts conformance corpus: the
-// valid ones are admitted, the invalid ones refused.
+// valid ones are admitted, the invalid ones refused, for the reason the
+// fixture names. A receipt given as text is posted as that text; a
+// fixture with its own key is checked by a log configured with that key,
+// which refuses a weak key when it opens and when it verifies.
 func TestConformanceReceipts(t *testing.T) {
 	pub, err := keys.LoadPublicKey("../../testdata/conformance/public-key.pem")
 	if err != nil {
@@ -188,16 +215,53 @@ func TestConformanceReceipts(t *testing.T) {
 	if len(files) < 8 {
 		t.Fatalf("found %d v2 fixtures", len(files))
 	}
+	var withText, withKey int
 	for _, f := range files {
+		name := filepath.Base(f)
 		raw, _ := os.ReadFile(f)
 		var fx fixture
 		if err := json.Unmarshal(raw, &fx); err != nil {
 			t.Fatal(err)
 		}
-		_, err := l.Append(fx.Receipt)
-		if (err == nil) != fx.Expected.OK {
-			t.Errorf("%s: err=%v, expected ok=%v", filepath.Base(f), err, fx.Expected.OK)
+		body := []byte(fx.Receipt)
+		if fx.ReceiptText != "" {
+			body = []byte(fx.ReceiptText)
+			withText++
 		}
+		if len(body) == 0 {
+			t.Fatalf("%s: no receipt or receiptText", name)
+		}
+		var errs []error
+		if fx.PublicKeyPem != "" {
+			withKey++
+			key := fixtureKey(t, fx.PublicKeyPem)
+			c := newEnv(t).cfg()
+			c.IssuerKeys = []ed25519.PublicKey{key}
+			if own, err := Open(c); err != nil {
+				errs = append(errs, err)
+			} else {
+				_, err := own.Append(body)
+				own.Close()
+				errs = append(errs, err)
+			}
+			// Below Open, admission's own check meets the key too.
+			_, _, err := verifyReceipt(body, []ed25519.PublicKey{key})
+			errs = append(errs, err)
+		} else {
+			_, err := l.Append(body)
+			errs = append(errs, err)
+		}
+		for _, err := range errs {
+			if (err == nil) != fx.Expected.OK {
+				t.Errorf("%s: err=%v, expected ok=%v", name, err, fx.Expected.OK)
+			} else if err != nil && fx.Expected.ReasonContains != "" &&
+				!regexp.MustCompile("(?i)"+fx.Expected.ReasonContains).MatchString(err.Error()) {
+				t.Errorf("%s: err=%v, want a reason containing %q", name, err, fx.Expected.ReasonContains)
+			}
+		}
+	}
+	if withText == 0 || withKey == 0 {
+		t.Fatalf("%d receiptText and %d publicKeyPem fixtures; the corpus has both", withText, withKey)
 	}
 	// The valid fixtures share one canonical, so they are one entry.
 	if l.STH().TreeSize != 1 {

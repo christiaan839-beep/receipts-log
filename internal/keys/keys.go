@@ -16,6 +16,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/christiaan839-beep/receipts-log/internal/vaos"
 )
 
 // maxKeyFile bounds every key file read.
@@ -74,7 +77,29 @@ func ParsePublicKeyPEM(data []byte) (ed25519.PublicKey, error) {
 	if !ok {
 		return nil, errors.New("keys: public key is not Ed25519")
 	}
+	if err := CheckPublicKey(ed); err != nil {
+		return nil, err
+	}
 	return ed, nil
+}
+
+// CheckPublicKey refuses an Ed25519 public key that is not 32 bytes, is
+// a point of small order or is a non-canonical encoding, by the rule
+// internal/vaos applies when it loads a key (VAOS 2.0 section 7.3).
+// Under a small-order key, such as the identity, one signature verifies
+// every message.
+func CheckPublicKey(pub ed25519.PublicKey) error {
+	if len(pub) != ed25519.PublicKeySize {
+		return errors.New("keys: not an Ed25519 public key")
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return fmt.Errorf("keys: %w", err)
+	}
+	if _, err := vaos.LoadEd25519PublicKeyFromPEM(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})); err != nil {
+		return fmt.Errorf("keys: %s", strings.TrimPrefix(err.Error(), "vaos: "))
+	}
+	return nil
 }
 
 // LoadPrivateKey reads a PKCS #8 PEM Ed25519 private key from path. It

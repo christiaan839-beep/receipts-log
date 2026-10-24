@@ -312,3 +312,16 @@ func TestDefaultStatePath(t *testing.T) {
 		}
 	}
 }
+
+// The log refuses to start with an issuer key under which one signature
+// verifies every message (VAOS 2.0 section 7.3).
+func TestLoadIssuerKeysRefusesWeakKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.pem")
+	identity := "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----\n"
+	if err := os.WriteFile(path, []byte(identity), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadIssuerKeys([]string{path}); err == nil || !strings.Contains(err.Error(), "public key is a small-order point") {
+		t.Fatalf("loadIssuerKeys: %v", err)
+	}
+}

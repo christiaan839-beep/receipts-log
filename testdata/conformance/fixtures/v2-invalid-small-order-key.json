@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid — the public key is the identity point, under which this signature verifies every message; the key is refused",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"agentSlug\":\"loan-underwriter\",\"issuedAt\":\"2026-05-18T10:00:00Z\",\"overall\":\"pass\",\"rules\":[{\"ruleId\":\"hipaa-no-raw-ssn\",\"verdict\":\"pass\",\"durationMs\":2}],\"runId\":\"run_conformance_001\",\"tokenId\":\"tok_001\",\"verdictId\":\"v_conf_001\"}",
+    "contentHash": "sha256:98832a2541b54553101a911f5980cd98ce800da7e1bc0e6364367b9f434d6da0",
+    "signature": "v2=AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "public key is a small-order point"
+  }
+}

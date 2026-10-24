@@ -53,8 +53,11 @@ checks this against a checkout of that repository:
 - its `canonicalizeSth` produces the same canonical string, including for log
   IDs with quotes, control characters, U+2028 and non-ASCII text, and node's
   Ed25519 verifies this server's tree-head signatures;
-- its witness CLI (`bin/witness.mjs`) witnesses this server, accepts its
-  consistency proofs and exits 1 on a fork;
+- its witness CLI (`bin/witness.mjs`), given this log's ID and public key,
+  accepts this server's tree heads (no field beyond those the signature
+  covers, and SHA-256 of no bytes as the empty tree's root), witnesses them,
+  accepts its consistency proofs, refuses another log ID and exits 1 on a
+  fork;
 - this repository's witness witnesses a log built on its TypeScript
   `TransparencyLog` and detects a fork of it;
 - the conformance fixtures in `testdata/conformance` and the verifier copy in
@@ -84,6 +87,10 @@ dist/receipts-log serve \
   -data ./data -log-id example-log -log-key log.key \
   -issuer-key issuer.pem -witness-key w1=w1.pub -addr :8080
 ```
+
+Every command refuses a public key file (issuer, witness or log key) that holds
+an Ed25519 point of small order or a non-canonical encoding (VAOS 2.0 §7.3):
+under the identity key, for one, a single signature verifies every message.
 
 The `serve` flags that name files, identifiers, the address and the log level
 also read environment variables (`RECEIPTS_LOG_DATA`, `RECEIPTS_LOG_ID`,
@@ -128,10 +135,15 @@ receipt admitted under older rules stays in it; the server still opens and
 serves such a store. For example, receipts-log builds before the sync with
 verifiable-receipts fd2390b admitted a receipt whose `contentHash` is `""`;
 `check` reports it with the reason `receipt signature does not verify under any
-configured issuer key: contentHash mismatch with canonical bytes`. A receipt
-that verifies under none of the keys given (for instance an issuer key you no
-longer configure) is reported too, with the reason a submission of it gets
-today, the 422 `error` of `POST /v1/entries`.
+configured issuer key: contentHash mismatch with canonical bytes`. Builds
+before the sync with verifiable-receipts 24f5c47 admitted receipts nested
+deeper than 64 levels, counted on the text, which `check` reports with the
+reason `receipt is not a valid receipt object: vaos: receipt nesting deeper
+than 64`, or `receipt signature does not verify under any configured issuer
+key: canonical nesting deeper than 64` when only its canonical is that deep.
+A receipt that verifies under none of the keys given (for instance an issuer
+key you no longer configure) is reported too, with the reason a submission of
+it gets today, the 422 `error` of `POST /v1/entries`.
 
 Run a witness, once or as a daemon (default interval one hour):
 

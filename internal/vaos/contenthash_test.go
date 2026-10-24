@@ -1,6 +1,6 @@
 // Copied from github.com/christiaan839-beep/verifiable-receipts,
 // packages/verifiable-receipts-go/contenthash_test.go at commit
-// fd2390b5cd30fb3c31c41810195ab7ec5ed51702 (Apache-2.0, Copyright 2026
+// 24f5c4780dba7c4f76b159b7f7844e17d0226cd6 (Apache-2.0, Copyright 2026
 // Christiaan de Wet / Sovereign Matrix). Changed: this notice added; the
 // code below is otherwise unchanged. See internal/vaos/README.md.
 

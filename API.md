@@ -50,6 +50,7 @@ rebuild it; a verifier should rebuild it from the other fields and compare.
 | Limit | Value |
 | --- | --- |
 | Receipt body (`POST /v1/entries`) | `-max-entry-bytes`, default 1 MiB (413 above it) |
+| Receipt nesting (`POST /v1/entries`) | 64 levels in the receipt (400 above it) and 64 in the text of its `canonical` (422 above it) |
 | Cosignature body | 64 KiB |
 | Query string | 2048 bytes (414 above it) |
 | Request headers | 16 KiB |
@@ -74,19 +75,46 @@ optional), so `""` is refused with 422. A log run by an older build may
 hold receipts admitted before this rule; `receipts-log check -issuer-key` lists
 them (see the README).
 
+Nesting is limited to 64 levels (VAOS 2.0 §7.2). The receipt object is one
+level and each array or object inside it one more; the depth is counted on the
+body's text before it is decoded, so a key given twice counts in both places,
+though a decoder keeps only the last. A deeper receipt is refused with 400 and
+`receipt nesting deeper than 64` in `error`, at any depth. The text of
+`canonical` is held to the same limit after its signature is checked: a deeper
+one is refused with 422 and `canonical nesting deeper than 64`.
+
+The issuer keys themselves are checked when the log starts: it refuses an
+Ed25519 key that is a point of small order or a non-canonical encoding
+(VAOS 2.0 §7.3), under which one signature can verify every receipt.
+
 | Status | Meaning |
 | --- | --- |
 | 201 | Appended |
 | 200 | Already logged (same `canonical`); the first entry logged for that `canonical` is returned, and its `contentHash` may differ from the submitted one |
-| 400 | Not a JSON object, no `canonical`, or a `canonical`, `contentHash` or `signature` that is neither a string nor `null` |
+| 400 | Not a JSON object, no `canonical` (a `canonical` that is not a string counts as none), or nested deeper than 64 |
 | 413 | Body too large |
 | 415 | Content type other than `application/json` |
-| 422 | Signature does not verify under any issuer key, or `contentHash` is a string that is not the canonical's hash, `""` included (the reason is in `error`) |
+| 422 | The receipt does not verify under any issuer key (the reason is in `error`) |
 | 503 | The log is read-only after a storage failure, holds 2^53 − 1 entries, or is busy |
 
 ```json
 {"index": 0, "leafHash": "<hex>", "duplicate": false, "sth": { <STH as above> }}
 ```
+
+A 422 `error` is `receipt signature does not verify under any configured
+issuer key: ` followed by the first key's reason, which is the
+verifiable-receipts verifiers' reason, among them:
+
+| Reason | The receipt |
+| --- | --- |
+| `missing signature` | has no `signature`, or one that is not a string |
+| `signature is not v2 (expected 'v2=<base64>')` | has a signature without the `v2=` prefix |
+| `signature base64 invalid` | has a signature that is not padded standard base64 (CR and LF included) |
+| `signature base64 invalid: not canonical` | has a signature that decodes but re-encodes differently |
+| `contentHash must be a string` | has a `contentHash` that is neither a string nor `null` |
+| `contentHash mismatch with canonical bytes` | has a `contentHash` string that is not the canonical's hash |
+| `signature does not verify under the supplied public key` | is not signed by the key |
+| `canonical nesting deeper than 64` | has a `canonical` whose text nests deeper than 64 |
 
 ### `GET /v1/entries/{index}`
 

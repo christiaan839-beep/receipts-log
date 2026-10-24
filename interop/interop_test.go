@@ -377,7 +377,10 @@ func TestProofsAcrossLanguages(t *testing.T) {
 }
 
 // TestTypeScriptWitnessAgainstThisLog runs bin/witness.mjs against this
-// server: it witnesses, sees growth as consistent, and exits 1 on a fork.
+// server, with --log-id and --log-public-key: it witnesses the empty tree
+// (whose root must be SHA-256 of no bytes) and every STH field passes its
+// shape check, it sees growth as consistent, it refuses another logId,
+// and it exits 1 on a fork.
 func TestTypeScriptWitnessAgainstThisLog(t *testing.T) {
 	repo := checkout(t)
 	ks := makeKeys(t)
@@ -396,11 +399,21 @@ func TestTypeScriptWitnessAgainstThisLog(t *testing.T) {
 			}
 		}
 	}
-	add(honest, "a", 4)
+	logPub := filepath.Join(ks.dir, "log.pub")
+	if err := os.WriteFile(logPub, []byte(ks.logPEM), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	state := filepath.Join(t.TempDir(), "ts-witness.json")
-	witnessRun := func() (int, map[string]any) {
-		cmd := exec.Command("bash", "run-ts-witness.sh", repo, "--url", srv.URL, "--key", ks.wTSPath,
-			"--witness-id", "w-ts", "--state", state, "--once", "--json")
+	// witnessRun returns the exit code, the last JSON line on stdout, and
+	// stdout and stderr for a failure message.
+	witnessRun := func(extra ...string) (int, map[string]any, string) {
+		args := []string{"run-ts-witness.sh", repo, "--url", srv.URL, "--key", ks.wTSPath,
+			"--witness-id", "w-ts", "--state", state, "--log-public-key", logPub,
+			"--timeout", "20", "--once", "--json"}
+		if len(extra) == 0 {
+			extra = []string{"--log-id", "interop-log"}
+		}
+		cmd := exec.Command("bash", append(args, extra...)...)
 		cmd.Env = append(os.Environ(), "TMPDIR="+t.TempDir())
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -414,22 +427,30 @@ func TestTypeScriptWitnessAgainstThisLog(t *testing.T) {
 		var res map[string]any
 		lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 		json.Unmarshal([]byte(lines[len(lines)-1]), &res)
+		out := "stdout: " + stdout.String() + "stderr: " + stderr.String()
 		if code == 2 {
-			t.Fatalf("witness.mjs usage/network error: %s %s", stdout.String(), stderr.String())
+			t.Fatalf("witness.mjs usage/network error: %s", out)
 		}
-		return code, res
+		return code, res, out
 	}
-	if code, res := witnessRun(); code != 0 || res["verdict"] != "witnessed" {
-		t.Fatalf("first run: %d %v", code, res)
+	if code, res, out := witnessRun(); code != 0 || res["verdict"] != "witnessed" || res["treeSize"] != float64(0) {
+		t.Fatalf("empty tree: %d %v\n%s", code, res, out)
+	}
+	add(honest, "a", 4)
+	if code, res, out := witnessRun(); code != 0 || res["verdict"] != "witnessed" || res["treeSize"] != float64(4) {
+		t.Fatalf("first entries: %d %v\n%s", code, res, out)
+	}
+	if code, res, out := witnessRun("--log-id", "other-log"); code != 1 || res["verdict"] != "log-id-mismatch" {
+		t.Fatalf("--log-id other-log: %d %v\n%s", code, res, out)
 	}
 	add(honest, "a", 5)
-	if code, res := witnessRun(); code != 0 || res["verdict"] != "witnessed" || res["treeSize"] != float64(9) {
-		t.Fatalf("after growth: %d %v", code, res)
+	if code, res, out := witnessRun(); code != 0 || res["verdict"] != "witnessed" || res["treeSize"] != float64(9) {
+		t.Fatalf("after growth: %d %v\n%s", code, res, out)
 	}
-	if code, res := witnessRun(); code != 0 || res["verdict"] != "no-change" {
-		t.Fatalf("no change: %d %v", code, res)
+	if code, res, out := witnessRun(); code != 0 || res["verdict"] != "no-change" {
+		t.Fatalf("no change: %d %v\n%s", code, res, out)
 	}
-	if got := honest.Cosignatures(0, true); len(got) != 2 {
+	if got := honest.Cosignatures(0, true); len(got) != 3 {
 		t.Fatalf("server recorded %d cosignatures from witness.mjs", len(got))
 	}
 	for _, c := range honest.Cosignatures(0, true) {
@@ -441,8 +462,8 @@ func TestTypeScriptWitnessAgainstThisLog(t *testing.T) {
 	forked := openLog(t, ks, "interop-log")
 	add(forked, "b", 12)
 	h.Store(handlerFor(t, forked))
-	if code, res := witnessRun(); code != 1 || res["verdict"] != "fork-detected" {
-		t.Fatalf("fork: %d %v", code, res)
+	if code, res, out := witnessRun(); code != 1 || res["verdict"] != "fork-detected" {
+		t.Fatalf("fork: %d %v\n%s", code, res, out)
 	}
 }
 
@@ -544,7 +565,7 @@ func TestFixturesAndVerifierCopiesMatchCheckout(t *testing.T) {
 	if !bytes.Equal(a, b) {
 		t.Error("public-key.pem differs")
 	}
-	for _, name := range []string{"verify.go", "transparency.go", "contenthash_test.go"} {
+	for _, name := range []string{"verify.go", "transparency.go", "contenthash_test.go", "nesting_test.go", "key_test.go"} {
 		orig, _ := os.ReadFile(filepath.Join(repo, "packages/verifiable-receipts-go", name))
 		copied, _ := os.ReadFile(filepath.Join("../internal/vaos", name))
 		i := bytes.Index(copied, []byte("\n\n"))
