@@ -34,11 +34,12 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-// Exit codes, as in the verifiable-receipts CLIs.
+// Exit codes, as in the verifiable-receipts CLIs, and one for check.
 const (
-	exitOK    = 0
-	exitFail  = 1 // verification failed or fork detected
-	exitUsage = 2 // usage, configuration or network error
+	exitOK            = 0
+	exitFail          = 1 // verification failed or fork detected
+	exitUsage         = 2 // usage, configuration or network error
+	exitNonconforming = 3 // check -issuer-key: the store is intact, but holds receipts admission now refuses
 )
 
 const usage = `receipts-log: a transparency log and witness for verifiable-receipts receipts.
@@ -51,15 +52,20 @@ Usage:
   receipts-log append   -url URL -file RECEIPT.json
   receipts-log sth      -url URL -log-public-key FILE
   receipts-log prove    -url URL -file RECEIPT.json -log-public-key FILE
-  receipts-log check    -data DIR -log-id ID -log-public-key FILE
+  receipts-log check    -data DIR -log-id ID -log-public-key FILE [-issuer-key FILE]
   receipts-log version
 
 Run "receipts-log <command> -h" for a command's flags. The serve and
 witness flags that name files, identifiers, addresses and the log level
 can also be set with environment variables; -h names each one.
 
-Exit codes: 0 success, 1 verification failed or fork detected,
-2 usage, configuration or network error.
+check -issuer-key (repeatable, as for serve) also verifies every stored
+receipt as the server admits receipts now, and lists those it refuses.
+
+Exit codes: 0 success, 1 verification failed or fork detected (for check,
+a corrupt store), 2 usage, configuration or network error, 3 check found
+stored receipts that the current admission rules refuse (the store is
+otherwise intact).
 `
 
 func main() {
@@ -189,13 +195,9 @@ func cmdServe(args []string, stderr io.Writer) error {
 	if insecure {
 		logger.Warn("log key file is readable by group or others; restrict it to the server's user", "path", *logKey)
 	}
-	var issuerKeys []ed25519.PublicKey
-	for _, p := range issuers {
-		k, err := keys.LoadPublicKey(p)
-		if err != nil {
-			return fmt.Errorf("-issuer-key: %w", err)
-		}
-		issuerKeys = append(issuerKeys, k)
+	issuerKeys, err := loadIssuerKeys(issuers)
+	if err != nil {
+		return err
 	}
 	witnessKeys := map[string]ed25519.PublicKey{}
 	for _, w := range witnesses {
@@ -267,6 +269,19 @@ func cmdServe(args []string, stderr io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// loadIssuerKeys loads the -issuer-key files of serve and check.
+func loadIssuerKeys(paths []string) ([]ed25519.PublicKey, error) {
+	var out []ed25519.PublicKey
+	for _, p := range paths {
+		k, err := keys.LoadPublicKey(p)
+		if err != nil {
+			return nil, fmt.Errorf("-issuer-key: %w", err)
+		}
+		out = append(out, k)
+	}
+	return out, nil
 }
 
 func defaultStatePath(witnessID string) string {
@@ -572,6 +587,9 @@ func cmdCheck(args []string, stdout, stderr io.Writer) (int, error) {
 	data := fs.String("data", "", "data directory")
 	logID := fs.String("log-id", "", "log identifier")
 	logPub := fs.String("log-public-key", "", "the log's SPKI PEM public key")
+	var issuers listFlag
+	fs.Var(&issuers, "issuer-key", "SPKI PEM Ed25519 issuer public key, as for serve; repeat for several. "+
+		"Also verify every stored receipt under these keys and list those admission now refuses (exit 3)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, err
 	}
@@ -582,11 +600,23 @@ func cmdCheck(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return exitUsage, err
 	}
-	rep, err := translog.Check(*data, *logID, lk)
+	issuerKeys, err := loadIssuerKeys(issuers)
+	if err != nil {
+		return exitUsage, err
+	}
+	rep, err := translog.Check(*data, *logID, lk, issuerKeys...)
 	out, _ := json.MarshalIndent(rep, "", "  ")
 	fmt.Fprintln(stdout, string(out))
 	if err != nil {
 		return exitFail, err
+	}
+	if rep.NonconformingCount > 0 {
+		shown := ""
+		if uint64(len(rep.Nonconforming)) < rep.NonconformingCount {
+			shown = fmt.Sprintf(" (the first %d are listed)", len(rep.Nonconforming))
+		}
+		return exitNonconforming, fmt.Errorf("%d stored receipt(s) fail the current admission rules%s",
+			rep.NonconformingCount, shown)
 	}
 	return exitOK, nil
 }

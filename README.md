@@ -100,12 +100,32 @@ Client commands:
 dist/receipts-log append -url http://localhost:8080 -file receipt.json
 dist/receipts-log sth    -url http://localhost:8080 -log-public-key log.pub
 dist/receipts-log prove  -url http://localhost:8080 -file receipt.json -log-public-key log.pub
-dist/receipts-log check  -data ./data -log-id example-log -log-public-key log.pub
+dist/receipts-log check  -data ./data -log-id example-log -log-public-key log.pub \
+  [-issuer-key issuer.pem]
 ```
 
 `prove` fetches the signed tree head, checks its signature, fetches the
 inclusion proof for the receipt's leaf and verifies it. `check` verifies a data
-directory offline without changing it.
+directory offline without changing it: every record's checksum and leaf hash,
+and the checkpoint's signature, log ID and root. With `-issuer-key` (repeatable,
+the same files as `serve`) it also verifies every stored receipt exactly as the
+server admits receipts now, and adds `issuerKeys`, `nonconformingCount` and
+`nonconforming` (index, leaf hash and the refusal reason of each, the first
+1000 in index order) to its report. Exit codes: 0 intact (and, with
+`-issuer-key`, every receipt passes), 1 the store is corrupt or the checkpoint
+does not verify (reported first, whatever the receipts), 2 usage or
+configuration error, 3 the store is intact but holds receipts that admission
+now refuses.
+
+**After upgrading**, run `check -issuer-key …` against each data directory, with
+the issuer keys the server is configured with. The log is append-only, so a
+receipt admitted under older rules stays in it; the server still opens and
+serves such a store. For example, receipts-log builds before the sync with
+verifiable-receipts fd2390b admitted a receipt whose `contentHash` is `""`;
+`check` reports it with the reason `contentHash mismatch with canonical bytes`.
+A receipt that verifies under none of the keys given (for instance an issuer key
+you no longer configure) is reported too, with the reason a submission of it
+gets today.
 
 Run a witness, once or as a daemon (default interval one hour):
 

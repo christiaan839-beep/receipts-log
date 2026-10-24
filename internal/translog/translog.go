@@ -126,10 +126,8 @@ func Open(cfg Config) (*Log, error) {
 	if len(cfg.IssuerKeys) == 0 {
 		return nil, errors.New("translog: at least one issuer key is required")
 	}
-	for i, k := range cfg.IssuerKeys {
-		if len(k) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("translog: issuer key %d is not an Ed25519 public key", i)
-		}
+	if err := validateIssuerKeys(cfg.IssuerKeys); err != nil {
+		return nil, err
 	}
 	maxEntry := cfg.MaxEntryBytes
 	if maxEntry == 0 {
@@ -313,11 +311,33 @@ func LeafForReceipt(body []byte) (merkle.Hash, error) {
 	return merkle.LeafHash([]byte(r.Canonical)), nil
 }
 
-// verify checks the receipt under each issuer key, as a VAOS 2.0
-// receipt and then as a Guardian attestation.
-func (l *Log) verify(r vaos.Receipt) (string, error) {
+func validateIssuerKeys(issuers []ed25519.PublicKey) error {
+	for i, k := range issuers {
+		if len(k) != ed25519.PublicKeySize {
+			return fmt.Errorf("translog: issuer key %d is not an Ed25519 public key", i)
+		}
+	}
+	return nil
+}
+
+// verifyReceipt applies admission's payload rules to body: it parses
+// the receipt and checks it under each issuer key, as a VAOS 2.0
+// receipt and then as a Guardian attestation. It returns the ID of the
+// key that verified it. Append and Check both call it, so Check
+// re-applies exactly the receipt checks admission applies today (the
+// size limit apart, which is the server's configuration).
+func verifyReceipt(body []byte, issuers []ed25519.PublicKey) (vaos.Receipt, string, error) {
+	r, err := parseReceipt(body)
+	if err != nil {
+		return r, "", err
+	}
+	issuer, err := verifyIssued(r, issuers)
+	return r, issuer, err
+}
+
+func verifyIssued(r vaos.Receipt, issuers []ed25519.PublicKey) (string, error) {
 	reason := ""
-	for _, k := range l.issuers {
+	for _, k := range issuers {
 		res := vaos.VerifyV2Receipt(r, k)
 		if res.OK {
 			return keys.ID(k), nil
@@ -338,11 +358,7 @@ func (l *Log) Append(body []byte) (AppendResult, error) {
 	if len(body) > l.maxEntry {
 		return AppendResult{}, ErrTooLarge
 	}
-	r, err := parseReceipt(body)
-	if err != nil {
-		return AppendResult{}, err
-	}
-	issuer, err := l.verify(r)
+	r, issuer, err := verifyReceipt(body, l.issuers)
 	if err != nil {
 		return AppendResult{}, err
 	}

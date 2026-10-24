@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"time"
 
 	"github.com/christiaan839-beep/receipts-log/internal/keys"
+	"github.com/christiaan839-beep/receipts-log/internal/store"
 	"github.com/christiaan839-beep/receipts-log/internal/testutil"
+	"github.com/christiaan839-beep/receipts-log/internal/translog"
 )
 
 func runCLI(t *testing.T, args ...string) (int, string, string) {
@@ -129,10 +132,77 @@ func TestCLIEndToEnd(t *testing.T) {
 	if !strings.Contains(serveErr.String(), `"msg":"entry appended"`) {
 		t.Fatalf("no structured log lines: %s", serveErr.String())
 	}
-	code, out, e = runCLI(t, "check", "-data", p("data"), "-log-id", "cli-log", "-log-public-key", p("log.pub"))
+	checkArgs := []string{"check", "-data", p("data"), "-log-id", "cli-log", "-log-public-key", p("log.pub")}
+	code, out, e = runCLI(t, checkArgs...)
 	if code != 0 || !strings.Contains(out, `"entries": 2`) {
 		t.Fatalf("check: %d %s %s", code, out, e)
 	}
+	if strings.Contains(out, "issuerKeys") || strings.Contains(out, "onconforming") {
+		t.Fatalf("check without -issuer-key re-verified receipts: %s", out)
+	}
+	withKey := append(append([]string{}, checkArgs...), "-issuer-key", p("issuer.pub"))
+	code, out, e = runCLI(t, withKey...)
+	if code != 0 || !strings.Contains(out, `"issuerKeys": 1`) || strings.Contains(out, "onconforming") {
+		t.Fatalf("check -issuer-key of valid receipts: %d %s %s", code, out, e)
+	}
+
+	// A receipt with "contentHash": "" that an older build admitted.
+	var m map[string]any
+	json.Unmarshal(testutil.Receipt(t, issuer, map[string]any{"runId": "cli-3"}), &m)
+	m["contentHash"] = ""
+	old, _ := json.Marshal(m)
+	writeUnverified(t, p("data"), "cli-log", p("log.key"), old)
+
+	code, out, e = runCLI(t, checkArgs...)
+	if code != 0 || !strings.Contains(out, `"entries": 3`) || strings.Contains(out, "onconforming") {
+		t.Fatalf("check without -issuer-key after an old admission: %d %s %s", code, out, e)
+	}
+	code, out, e = runCLI(t, withKey...)
+	if code != 3 || !strings.Contains(out, `"nonconformingCount": 1`) ||
+		!strings.Contains(out, `"index": 2`) || !strings.Contains(out, "contentHash mismatch") {
+		t.Fatalf("check -issuer-key after an old admission: %d %s %s", code, out, e)
+	}
+	// Corruption comes first: it is exit 1 even with nonconforming entries.
+	path := filepath.Join(p("data"), store.EntriesFile)
+	raw, _ := os.ReadFile(path)
+	raw[len(raw)-10] ^= 1
+	os.WriteFile(path, raw, 0o600)
+	if code, out, e = runCLI(t, withKey...); code != 1 {
+		t.Fatalf("check -issuer-key of a corrupt store: %d %s %s", code, out, e)
+	}
+}
+
+// writeUnverified appends bodies to the store in dir without verifying
+// them, as a build with older admission rules could have, and opens the
+// log once so it signs a checkpoint over them.
+func writeUnverified(t *testing.T, dir, logID, logKey string, bodies ...[]byte) {
+	t.Helper()
+	st, err := store.Open(store.Options{Dir: dir}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bodies {
+		leaf, err := translog.LeafForReceipt(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(leaf, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := keys.LoadPrivateKey(logKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := translog.Open(translog.Config{Dir: dir, LogID: logID, Key: key,
+		IssuerKeys: []ed25519.PublicKey{key.Public().(ed25519.PublicKey)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
 }
 
 func TestCLIUsageErrors(t *testing.T) {
@@ -145,6 +215,7 @@ func TestCLIUsageErrors(t *testing.T) {
 		{"prove"},
 		{"check"},
 		{"serve", "-data", "x", "-log-id", "y", "-log-key", "/does/not/exist", "-issuer-key", "z"},
+		{"check", "-data", "x", "-log-id", "y", "-log-public-key", "../../testdata/conformance/public-key.pem", "-issuer-key", "/does/not/exist"},
 	} {
 		if code, _, _ := runCLI(t, args...); code != 2 {
 			t.Errorf("%v: exit %d, want 2", args, code)
@@ -152,6 +223,10 @@ func TestCLIUsageErrors(t *testing.T) {
 	}
 	if code, _, _ := runCLI(t, "version"); code != 0 {
 		t.Fatal("version")
+	}
+	if code, out, _ := runCLI(t, "help"); code != 0 || !strings.Contains(out, "-issuer-key FILE") ||
+		!strings.Contains(out, "3 check found") {
+		t.Fatalf("help does not document check -issuer-key and exit 3: %s", out)
 	}
 	if code, _, _ := runCLI(t, "serve", "-h"); code != 0 {
 		t.Fatal("serve -h")
