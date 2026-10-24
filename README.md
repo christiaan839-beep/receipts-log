@@ -141,9 +141,19 @@ deeper than 64 levels, counted on the text, which `check` reports with the
 reason `receipt is not a valid receipt object: vaos: receipt nesting deeper
 than 64`, or `receipt signature does not verify under any configured issuer
 key: canonical nesting deeper than 64` when only its canonical is that deep.
-A receipt that verifies under none of the keys given (for instance an issuer
-key you no longer configure) is reported too, with the reason a submission of
-it gets today, the 422 `error` of `POST /v1/entries`.
+Such a store still opens, and `prove -file` still finds those receipts: a
+stored entry's leaf is the leaf of its `canonical` string, whatever the
+admission rules. A receipt that verifies under none of the keys given (for
+instance an issuer key you no longer configure) is reported too, with the
+reason a submission of it gets today, the `error` of `POST /v1/entries` (a
+422, or a 400 for a receipt nested too deep).
+
+Since that sync, `serve` also refuses to start, with exit 2, when an
+`-issuer-key` or `-witness-key` file holds an Ed25519 key that is a point of
+small order or a non-canonical encoding, for example `error: -issuer-key
+issuer.pem: keys: public key is a small-order point` or `error: -witness-key
+w1: w1.pub: keys: public key is not a canonical encoding`. Replace the key;
+the log cannot be served with it.
 
 Run a witness, once or as a daemon (default interval one hour):
 

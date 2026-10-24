@@ -191,7 +191,9 @@ func Open(cfg Config) (*Log, error) {
 }
 
 // checkEntry checks that a stored entry's leaf hash is the leaf of the
-// receipt stored with it.
+// receipt stored with it, by LeafForReceipt and not the admission rules:
+// an entry an older build admitted is intact even if admission now
+// refuses it (Check reports those separately).
 func checkEntry(leaf merkle.Hash, payload []byte) error {
 	got, err := LeafForReceipt(payload)
 	if err != nil {
@@ -308,13 +310,28 @@ func parseReceipt(body []byte) (vaos.Receipt, error) {
 	return r, nil
 }
 
-// LeafForReceipt returns the leaf hash a receipt is logged under.
+// LeafForReceipt returns the leaf hash a receipt is logged under: the
+// leaf of its "canonical", which must be a non-empty string (of a key
+// given twice, the last). It does not apply the admission rules, which
+// change between versions, so a receipt an older build admitted keeps
+// its leaf: Open and Check verify stored entries with it, and the prove
+// command finds a receipt with it. Admission uses parseReceipt, which
+// derives the same leaf for every receipt it accepts.
 func LeafForReceipt(body []byte) (merkle.Hash, error) {
-	r, err := parseReceipt(body)
-	if err != nil {
-		return merkle.Hash{}, err
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return merkle.Hash{}, fmt.Errorf("%w: %v", ErrInvalidReceipt, err)
 	}
-	return merkle.LeafHash([]byte(r.Canonical)), nil
+	var canonical string
+	if raw, ok := fields["canonical"]; ok {
+		if err := json.Unmarshal(raw, &canonical); err != nil {
+			return merkle.Hash{}, fmt.Errorf("%w: canonical is not a string", ErrInvalidReceipt)
+		}
+	}
+	if canonical == "" {
+		return merkle.Hash{}, fmt.Errorf("%w: missing canonical", ErrInvalidReceipt)
+	}
+	return merkle.LeafHash([]byte(canonical)), nil
 }
 
 // validateIssuerKeys refuses an issuer key that is not a usable Ed25519

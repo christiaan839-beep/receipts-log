@@ -83,6 +83,14 @@ though a decoder keeps only the last. A deeper receipt is refused with 400 and
 `canonical` is held to the same limit after its signature is checked: a deeper
 one is refused with 422 and `canonical nesting deeper than 64`.
 
+The two get different statuses because they fail at different steps. The
+receipt's depth is a property of the request text: the log reads the body with
+`ParseReceipt`, which refuses it before any key is tried, so the request is
+malformed (400), like a body that is not JSON. The canonical is a string
+inside a well-formed receipt; its depth is checked by the verifier after the
+signature, so a deep canonical is a verification outcome (422), like a
+signature that does not verify.
+
 The issuer keys themselves are checked when the log starts: it refuses an
 Ed25519 key that is a point of small order or a non-canonical encoding
 (VAOS 2.0 §7.3), under which one signature can verify every receipt.
