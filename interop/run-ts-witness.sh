@@ -2,9 +2,10 @@
 # run-ts-witness.sh — runs the verifiable-receipts witness CLI
 # (packages/verifiable-receipts/bin/witness.mjs) without building the
 # package: it copies the CLI scripts into a temporary directory, and the
-# TypeScript sources with ts-src.mjs, next to a dist/transparency.js that
-# re-exports src/transparency.ts, which Node loads with type stripping.
-# The checkout itself is not modified.
+# TypeScript sources with ts-src.mjs, next to a dist/ in which each
+# dist/<name>.js re-exports src/<name>.ts, which Node loads with type
+# stripping. The CLI may import any module of dist/ (witness.mjs imports
+# transparency.js and hash.js). The checkout itself is not modified.
 #
 # Usage: run-ts-witness.sh <checkout> <witness.mjs args...>
 set -euo pipefail
@@ -15,7 +16,10 @@ pkg="$repo/packages/verifiable-receipts"
 mkdir -p "$work/bin" "$work/dist" "$work/src"
 cp "$pkg"/bin/*.mjs "$work/bin/"
 node "$(dirname "$0")/ts-src.mjs" "$repo" "$work/src"
-printf 'export * from "../src/transparency.ts";\n' > "$work/dist/transparency.js"
+for ts in "$work"/src/*.ts; do
+  name="$(basename "$ts" .ts)"
+  printf 'export * from "../src/%s.ts";\n' "$name" > "$work/dist/$name.js"
+done
 printf '{"type":"module"}\n' > "$work/package.json"
 set +e
 node "$work/bin/witness.mjs" "$@"

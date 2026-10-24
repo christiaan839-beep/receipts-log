@@ -129,6 +129,9 @@ func Open(cfg Config) (*Log, error) {
 	if err := validateIssuerKeys(cfg.IssuerKeys); err != nil {
 		return nil, err
 	}
+	if err := validateWitnessKeys(cfg.WitnessKeys); err != nil {
+		return nil, err
+	}
 	maxEntry := cfg.MaxEntryBytes
 	if maxEntry == 0 {
 		maxEntry = store.DefaultMaxPayload
@@ -188,7 +191,9 @@ func Open(cfg Config) (*Log, error) {
 }
 
 // checkEntry checks that a stored entry's leaf hash is the leaf of the
-// receipt stored with it.
+// receipt stored with it, by LeafForReceipt and not the admission rules:
+// an entry an older build admitted is intact even if admission now
+// refuses it (Check reports those separately).
 func checkEntry(leaf merkle.Hash, payload []byte) error {
 	got, err := LeafForReceipt(payload)
 	if err != nil {
@@ -288,12 +293,15 @@ func (l *Log) signAndCheckpointLocked() error {
 	return nil
 }
 
-// parseReceipt decodes a receipt and requires a canonical string. The
-// decoder replaces invalid UTF-8 with U+FFFD, so the canonical is valid
-// UTF-8.
+// parseReceipt decodes a receipt and requires a canonical string. It
+// reads with vaos.ParseReceipt, which counts the text's depth before
+// decoding it, so a receipt nested deeper than 64 is refused at any
+// depth, a duplicate key the decoder discards included (VAOS 2.0 section
+// 7.2). The decoder replaces invalid UTF-8 with U+FFFD, so the canonical
+// is valid UTF-8.
 func parseReceipt(body []byte) (vaos.Receipt, error) {
-	var r vaos.Receipt
-	if err := json.Unmarshal(body, &r); err != nil {
+	r, err := vaos.ParseReceipt(body)
+	if err != nil {
 		return r, fmt.Errorf("%w: %v", ErrInvalidReceipt, err)
 	}
 	if r.Canonical == "" {
@@ -302,19 +310,49 @@ func parseReceipt(body []byte) (vaos.Receipt, error) {
 	return r, nil
 }
 
-// LeafForReceipt returns the leaf hash a receipt is logged under.
+// LeafForReceipt returns the leaf hash a receipt is logged under: the
+// leaf of its "canonical", which must be a non-empty string (of a key
+// given twice, the last). It does not apply the admission rules, which
+// change between versions, so a receipt an older build admitted keeps
+// its leaf: Open and Check verify stored entries with it, and the prove
+// command finds a receipt with it. Admission uses parseReceipt, which
+// derives the same leaf for every receipt it accepts.
 func LeafForReceipt(body []byte) (merkle.Hash, error) {
-	r, err := parseReceipt(body)
-	if err != nil {
-		return merkle.Hash{}, err
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return merkle.Hash{}, fmt.Errorf("%w: %v", ErrInvalidReceipt, err)
 	}
-	return merkle.LeafHash([]byte(r.Canonical)), nil
+	var canonical string
+	if raw, ok := fields["canonical"]; ok {
+		if err := json.Unmarshal(raw, &canonical); err != nil {
+			return merkle.Hash{}, fmt.Errorf("%w: canonical is not a string", ErrInvalidReceipt)
+		}
+	}
+	if canonical == "" {
+		return merkle.Hash{}, fmt.Errorf("%w: missing canonical", ErrInvalidReceipt)
+	}
+	return merkle.LeafHash([]byte(canonical)), nil
 }
 
+// validateIssuerKeys refuses an issuer key that is not a usable Ed25519
+// public key, a small-order or non-canonical one included (VAOS 2.0
+// section 7.3): under the identity key one signature verifies every
+// receipt.
 func validateIssuerKeys(issuers []ed25519.PublicKey) error {
 	for i, k := range issuers {
-		if len(k) != ed25519.PublicKeySize {
-			return fmt.Errorf("translog: issuer key %d is not an Ed25519 public key", i)
+		if err := keys.CheckPublicKey(k); err != nil {
+			return fmt.Errorf("translog: issuer key %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// validateWitnessKeys refuses a witness key as validateIssuerKeys does:
+// under a small-order key anyone could cosign as that witness.
+func validateWitnessKeys(witnesses map[string]ed25519.PublicKey) error {
+	for id, k := range witnesses {
+		if err := keys.CheckPublicKey(k); err != nil {
+			return fmt.Errorf("translog: witness key %q: %w", id, err)
 		}
 	}
 	return nil

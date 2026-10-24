@@ -34,7 +34,8 @@ type CheckReport struct {
 
 // Nonconforming is a stored receipt that the current admission rules
 // refuse. Reason is the error Append returns for it, which the server
-// sends with HTTP 422. PastCheckpoint marks an entry that no signed
+// sends with HTTP 422, or 400 for a receipt it cannot read (one nested
+// deeper than 64, for example). PastCheckpoint marks an entry that no signed
 // checkpoint covers yet (an append interrupted before its checkpoint;
 // the server signs one over it when it next opens the directory).
 type Nonconforming struct {
