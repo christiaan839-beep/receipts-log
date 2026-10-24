@@ -423,26 +423,25 @@ func TestCheck(t *testing.T) {
 	}
 	l.Close()
 	pub := e.logKey.Public().(ed25519.PublicKey)
-	rep, err := Check(e.dir, "test-log", pub)
+	rep, err := Check(e.dir, "test-log", pub, CheckOptions{})
 	if err != nil || rep.Entries != 5 || rep.CheckpointSize != 5 {
 		t.Fatalf("%+v %v", rep, err)
 	}
-	if _, err := Check(e.dir, "test-log", testutil.Key(t).Public().(ed25519.PublicKey)); err == nil {
+	if _, err := Check(e.dir, "test-log", testutil.Key(t).Public().(ed25519.PublicKey), CheckOptions{}); err == nil {
 		t.Fatal("wrong key accepted")
 	}
 	path := filepath.Join(e.dir, store.EntriesFile)
 	data, _ := os.ReadFile(path)
 	data[len(data)-10] ^= 1
 	os.WriteFile(path, data, 0o600)
-	if _, err := Check(e.dir, "test-log", pub); !errors.Is(err, store.ErrCorrupt) {
+	if _, err := Check(e.dir, "test-log", pub, CheckOptions{}); !errors.Is(err, store.ErrCorrupt) {
 		t.Fatalf("corruption: %v", err)
 	}
 }
 
-// writeUnverified stores bodies the way a log built before an admission
-// rule existed could have: straight into the store, without verifying
-// them. Opening the log afterwards signs a checkpoint over them.
-func writeUnverified(t *testing.T, e *env, bodies ...[]byte) {
+// appendRaw appends bodies to the store without verifying them and
+// without opening the log, so no checkpoint covers them.
+func appendRaw(t *testing.T, e *env, bodies ...[]byte) {
 	t.Helper()
 	st, err := store.Open(store.Options{Dir: e.dir}, nil, nil)
 	if err != nil {
@@ -460,6 +459,14 @@ func writeUnverified(t *testing.T, e *env, bodies ...[]byte) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// writeUnverified stores bodies the way a log built before an admission
+// rule existed could have: straight into the store, without verifying
+// them. Opening the log afterwards signs a checkpoint over them.
+func writeUnverified(t *testing.T, e *env, bodies ...[]byte) {
+	t.Helper()
+	appendRaw(t, e, bodies...)
 	e.open(t).Close()
 }
 
@@ -478,6 +485,15 @@ func withField(t *testing.T, receipt []byte, key string, value any) []byte {
 	return out
 }
 
+// count returns the report's nonconforming count, which must be set.
+func count(t *testing.T, rep CheckReport) uint64 {
+	t.Helper()
+	if rep.NonconformingCount == nil {
+		t.Fatalf("nonconformingCount missing: %+v", rep)
+	}
+	return *rep.NonconformingCount
+}
+
 // Check with issuer keys reports the stored receipts that admission
 // would now refuse; without them it does not look at payloads.
 func TestCheckReverifiesReceipts(t *testing.T) {
@@ -489,8 +505,9 @@ func TestCheckReverifiesReceipts(t *testing.T) {
 		}
 	}
 	l.Close()
+	otherKey := testutil.Key(t)
 	emptyHash := withField(t, e.receipt(t, 2), "contentHash", "")
-	otherIssuer := testutil.Receipt(t, testutil.Key(t), map[string]any{"runId": "other"})
+	otherIssuer := testutil.Receipt(t, otherKey, map[string]any{"runId": "other"})
 	// Admission refuses both today.
 	l = e.open(t)
 	for _, b := range [][]byte{emptyHash, otherIssuer} {
@@ -502,8 +519,8 @@ func TestCheckReverifiesReceipts(t *testing.T) {
 	writeUnverified(t, e, emptyHash, otherIssuer)
 
 	pub := e.logKey.Public().(ed25519.PublicKey)
-	rep, err := Check(e.dir, "test-log", pub)
-	if err != nil || rep.Entries != 4 || rep.Nonconforming != nil || rep.NonconformingCount != 0 || rep.IssuerKeys != 0 {
+	rep, err := Check(e.dir, "test-log", pub, CheckOptions{})
+	if err != nil || rep.Entries != 4 || rep.Nonconforming != nil || rep.NonconformingCount != nil || rep.IssuerKeys != 0 {
 		t.Fatalf("without issuer keys: %+v %v", rep, err)
 	}
 	if out, _ := json.Marshal(rep); strings.Contains(string(out), "onconforming") || strings.Contains(string(out), "issuerKeys") {
@@ -511,11 +528,11 @@ func TestCheckReverifiesReceipts(t *testing.T) {
 	}
 
 	issuer := e.issuer.Public().(ed25519.PublicKey)
-	rep, err = Check(e.dir, "test-log", pub, issuer)
+	rep, err = Check(e.dir, "test-log", pub, CheckOptions{IssuerKeys: []ed25519.PublicKey{issuer}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Entries != 4 || rep.IssuerKeys != 1 || rep.NonconformingCount != 2 || len(rep.Nonconforming) != 2 {
+	if rep.Entries != 4 || rep.IssuerKeys != 1 || count(t, rep) != 2 || len(rep.Nonconforming) != 2 {
 		t.Fatalf("with the issuer key: %+v", rep)
 	}
 	for i, want := range []struct {
@@ -528,23 +545,31 @@ func TestCheckReverifiesReceipts(t *testing.T) {
 	} {
 		got := rep.Nonconforming[i]
 		leaf, _ := LeafForReceipt(want.body)
-		if got.Index != want.index || got.LeafHash != leaf.String() ||
+		if got.Index != want.index || got.LeafHash != leaf.String() || got.PastCheckpoint ||
 			!strings.Contains(got.Reason, want.reason) || !strings.HasPrefix(got.Reason, ErrUnverified.Error()) {
 			t.Errorf("entry %d: %+v", i, got)
 		}
 	}
 	out, _ := json.Marshal(rep)
-	if !strings.Contains(string(out), `"nonconforming":[{"index":2,"leafHash":"`) {
+	if !strings.Contains(string(out), `"nonconformingCount":2,"nonconforming":[{"index":2,"leafHash":"`) ||
+		strings.Contains(string(out), "pastCheckpoint") {
 		t.Fatalf("JSON: %s", out)
 	}
 
-	// The other issuer's key makes its receipt conform and the rest not.
-	rep, err = Check(e.dir, "test-log", pub, testutil.Key(t).Public().(ed25519.PublicKey), issuer)
-	if err != nil || rep.IssuerKeys != 2 || rep.NonconformingCount != 2 {
-		t.Fatalf("two keys: %+v %v", rep, err)
+	// Every key counts, whichever position it has: with the other
+	// issuer's key too, only the empty contentHash is left.
+	for _, ks := range [][]ed25519.PublicKey{
+		{otherKey.Public().(ed25519.PublicKey), issuer},
+		{issuer, otherKey.Public().(ed25519.PublicKey)},
+	} {
+		rep, err = Check(e.dir, "test-log", pub, CheckOptions{IssuerKeys: ks})
+		if err != nil || rep.IssuerKeys != 2 || count(t, rep) != 1 || len(rep.Nonconforming) != 1 ||
+			rep.Nonconforming[0].Index != 2 || !strings.Contains(rep.Nonconforming[0].Reason, "contentHash mismatch") {
+			t.Fatalf("two keys: %+v %v", rep, err)
+		}
 	}
 
-	if _, err := Check(e.dir, "test-log", pub, ed25519.PublicKey{1, 2, 3}); err == nil {
+	if _, err := Check(e.dir, "test-log", pub, CheckOptions{IssuerKeys: []ed25519.PublicKey{{1, 2, 3}}}); err == nil {
 		t.Fatal("a malformed issuer key was accepted")
 	}
 }
@@ -556,16 +581,20 @@ func TestCheckReverifyAllValid(t *testing.T) {
 		l.Append(e.receipt(t, i))
 	}
 	l.Close()
-	rep, err := Check(e.dir, "test-log", e.logKey.Public().(ed25519.PublicKey), e.issuer.Public().(ed25519.PublicKey))
-	if err != nil || rep.Entries != 3 || rep.IssuerKeys != 1 || rep.NonconformingCount != 0 || len(rep.Nonconforming) != 0 {
+	rep, err := Check(e.dir, "test-log", e.logKey.Public().(ed25519.PublicKey),
+		CheckOptions{IssuerKeys: []ed25519.PublicKey{e.issuer.Public().(ed25519.PublicKey)}})
+	if err != nil || rep.Entries != 3 || rep.IssuerKeys != 1 || count(t, rep) != 0 || len(rep.Nonconforming) != 0 {
 		t.Fatalf("%+v %v", rep, err)
+	}
+	// Scripts can read the count: it is present, and 0, when clean.
+	out, _ := json.Marshal(rep)
+	if !strings.Contains(string(out), `"nonconformingCount":0`) || strings.Contains(string(out), `"nonconforming":`) {
+		t.Fatalf("JSON: %s", out)
 	}
 }
 
-// The list is capped; the count is not.
+// The list is capped per call; the count is not.
 func TestCheckReverifyCap(t *testing.T) {
-	defer func(n int) { nonconformingLimit = n }(nonconformingLimit)
-	nonconformingLimit = 2
 	e := newEnv(t)
 	e.open(t).Close()
 	var bad [][]byte
@@ -573,10 +602,44 @@ func TestCheckReverifyCap(t *testing.T) {
 		bad = append(bad, withField(t, e.receipt(t, i), "contentHash", ""))
 	}
 	writeUnverified(t, e, bad...)
-	rep, err := Check(e.dir, "test-log", e.logKey.Public().(ed25519.PublicKey), e.issuer.Public().(ed25519.PublicKey))
-	if err != nil || rep.NonconformingCount != 5 || len(rep.Nonconforming) != 2 ||
+	pub := e.logKey.Public().(ed25519.PublicKey)
+	issuers := []ed25519.PublicKey{e.issuer.Public().(ed25519.PublicKey)}
+	rep, err := Check(e.dir, "test-log", pub, CheckOptions{IssuerKeys: issuers, NonconformingLimit: 2})
+	if err != nil || count(t, rep) != 5 || len(rep.Nonconforming) != 2 ||
 		rep.Nonconforming[0].Index != 0 || rep.Nonconforming[1].Index != 1 {
+		t.Fatalf("limit 2: %+v %v", rep, err)
+	}
+	// A zero limit is the default.
+	rep, err = Check(e.dir, "test-log", pub, CheckOptions{IssuerKeys: issuers})
+	if err != nil || count(t, rep) != 5 || len(rep.Nonconforming) != 5 {
+		t.Fatalf("default limit: %+v %v", rep, err)
+	}
+	if DefaultNonconformingLimit != 1000 {
+		t.Fatalf("default limit %d", DefaultNonconformingLimit)
+	}
+}
+
+// Entries past the checkpoint (an append interrupted before its
+// checkpoint) are verified too, and marked.
+func TestCheckReverifyPastCheckpoint(t *testing.T) {
+	e := newEnv(t)
+	l := e.open(t)
+	for i := 0; i < 2; i++ {
+		l.Append(e.receipt(t, i))
+	}
+	l.Close()
+	bad := withField(t, e.receipt(t, 2), "contentHash", "")
+	appendRaw(t, e, bad)
+	rep, err := Check(e.dir, "test-log", e.logKey.Public().(ed25519.PublicKey),
+		CheckOptions{IssuerKeys: []ed25519.PublicKey{e.issuer.Public().(ed25519.PublicKey)}})
+	if err != nil || rep.Entries != 3 || rep.CheckpointSize != 2 || count(t, rep) != 1 || len(rep.Nonconforming) != 1 {
 		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := rep.Nonconforming[0]; got.Index != 2 || !got.PastCheckpoint || !strings.Contains(got.Reason, "contentHash mismatch") {
+		t.Fatalf("%+v", got)
+	}
+	if out, _ := json.Marshal(rep); !strings.Contains(string(out), `"pastCheckpoint":true`) {
+		t.Fatalf("JSON: %s", out)
 	}
 }
 
@@ -589,7 +652,8 @@ func TestCheckReverifyCorrupt(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	data[len(data)-10] ^= 1
 	os.WriteFile(path, data, 0o600)
-	if _, err := Check(e.dir, "test-log", e.logKey.Public().(ed25519.PublicKey), e.issuer.Public().(ed25519.PublicKey)); !errors.Is(err, store.ErrCorrupt) {
+	if _, err := Check(e.dir, "test-log", e.logKey.Public().(ed25519.PublicKey),
+		CheckOptions{IssuerKeys: []ed25519.PublicKey{e.issuer.Public().(ed25519.PublicKey)}}); !errors.Is(err, store.ErrCorrupt) {
 		t.Fatalf("corruption: %v", err)
 	}
 }

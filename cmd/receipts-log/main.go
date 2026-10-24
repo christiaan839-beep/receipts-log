@@ -604,19 +604,19 @@ func cmdCheck(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return exitUsage, err
 	}
-	rep, err := translog.Check(*data, *logID, lk, issuerKeys...)
+	rep, err := translog.Check(*data, *logID, lk, translog.CheckOptions{IssuerKeys: issuerKeys})
 	out, _ := json.MarshalIndent(rep, "", "  ")
 	fmt.Fprintln(stdout, string(out))
 	if err != nil {
 		return exitFail, err
 	}
-	if rep.NonconformingCount > 0 {
+	if n := rep.NonconformingCount; n != nil && *n > 0 {
 		shown := ""
-		if uint64(len(rep.Nonconforming)) < rep.NonconformingCount {
+		if uint64(len(rep.Nonconforming)) < *n {
 			shown = fmt.Sprintf(" (the first %d are listed)", len(rep.Nonconforming))
 		}
 		return exitNonconforming, fmt.Errorf("%d stored receipt(s) fail the current admission rules%s",
-			rep.NonconformingCount, shown)
+			*n, shown)
 	}
 	return exitOK, nil
 }

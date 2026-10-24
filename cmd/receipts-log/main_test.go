@@ -142,8 +142,15 @@ func TestCLIEndToEnd(t *testing.T) {
 	}
 	withKey := append(append([]string{}, checkArgs...), "-issuer-key", p("issuer.pub"))
 	code, out, e = runCLI(t, withKey...)
-	if code != 0 || !strings.Contains(out, `"issuerKeys": 1`) || strings.Contains(out, "onconforming") {
+	if code != 0 || !strings.Contains(out, `"issuerKeys": 1`) || !strings.Contains(out, `"nonconformingCount": 0`) ||
+		strings.Contains(out, `"nonconforming":`) {
 		t.Fatalf("check -issuer-key of valid receipts: %d %s %s", code, out, e)
+	}
+	// check takes issuer keys only from -issuer-key.
+	t.Setenv("RECEIPTS_LOG_ISSUER_KEYS", p("issuer.pub"))
+	code, out, e = runCLI(t, checkArgs...)
+	if code != 0 || strings.Contains(out, "issuerKeys") || strings.Contains(out, "onconforming") {
+		t.Fatalf("check read RECEIPTS_LOG_ISSUER_KEYS: %d %s %s", code, out, e)
 	}
 
 	// A receipt with "contentHash": "" that an older build admitted.
@@ -169,6 +176,70 @@ func TestCLIEndToEnd(t *testing.T) {
 	os.WriteFile(path, raw, 0o600)
 	if code, out, e = runCLI(t, withKey...); code != 1 {
 		t.Fatalf("check -issuer-key of a corrupt store: %d %s %s", code, out, e)
+	}
+}
+
+// A checkpoint that the entries do not reach is corruption, and exit 1,
+// even when the scan succeeded and found nonconforming receipts: the
+// last whole record is cut off, so the checkpoint covers 4 entries and
+// the file holds 3, one of them with "contentHash": "".
+func TestCLICheckCorruptionBeforeNonconforming(t *testing.T) {
+	dir := t.TempDir()
+	p := func(n string) string { return filepath.Join(dir, n) }
+	for _, k := range []string{"log", "issuer"} {
+		if code, _, e := runCLI(t, "keygen", "-out", p(k+".key"), "-pub", p(k+".pub")); code != 0 {
+			t.Fatalf("keygen %s: %s", k, e)
+		}
+	}
+	logKey, _, _ := keys.LoadPrivateKey(p("log.key"))
+	issuer, _, _ := keys.LoadPrivateKey(p("issuer.key"))
+	appendValid := func(runID string) {
+		t.Helper()
+		l, err := translog.Open(translog.Config{Dir: p("data"), LogID: "cli-log", Key: logKey,
+			IssuerKeys: []ed25519.PublicKey{issuer.Public().(ed25519.PublicKey)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer l.Close()
+		if _, err := l.Append(testutil.Receipt(t, issuer, map[string]any{"runId": runID})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendValid("a")
+	appendValid("b")
+	var m map[string]any
+	json.Unmarshal(testutil.Receipt(t, issuer, map[string]any{"runId": "c"}), &m)
+	m["contentHash"] = ""
+	bad, _ := json.Marshal(m)
+	writeUnverified(t, p("data"), "cli-log", p("log.key"), bad)
+	appendValid("d")
+
+	path := filepath.Join(p("data"), store.EntriesFile)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := f.Stat()
+	res, err := store.Scan(f, st.Size(), store.DefaultMaxPayload, 4, nil)
+	f.Close()
+	if err != nil || len(res.Offsets) != 4 {
+		t.Fatalf("scan: %v %d", err, len(res.Offsets))
+	}
+	if err := os.Truncate(path, res.Offsets[3]); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{"check", "-data", p("data"), "-log-id", "cli-log", "-log-public-key", p("log.pub")}
+	if code, out, e := runCLI(t, args...); code != 1 {
+		t.Fatalf("check: %d %s %s", code, out, e)
+	}
+	code, out, e := runCLI(t, append(args, "-issuer-key", p("issuer.pub"))...)
+	if !strings.Contains(out, `"entries": 3`) || !strings.Contains(out, `"checkpointSize": 4`) ||
+		!strings.Contains(out, `"nonconformingCount": 1`) {
+		t.Fatalf("the scan did not succeed: %s %s", out, e)
+	}
+	if code != 1 {
+		t.Fatalf("check -issuer-key: exit %d, want 1 (corruption first): %s", code, e)
 	}
 }
 

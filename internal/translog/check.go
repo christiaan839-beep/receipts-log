@@ -24,30 +24,41 @@ type CheckReport struct {
 	// verified under.
 	IssuerKeys int `json:"issuerKeys,omitempty"`
 	// NonconformingCount is the number of stored receipts that
-	// admission would refuse today.
-	NonconformingCount uint64 `json:"nonconformingCount,omitempty"`
-	// Nonconforming lists the first of them, in index order, up to
-	// NonconformingLimit.
+	// admission would refuse today. It is non-nil, 0 included, exactly
+	// when Check was given issuer keys, so a script can read it.
+	NonconformingCount *uint64 `json:"nonconformingCount,omitempty"`
+	// Nonconforming lists the first of them, in index order, up to the
+	// limit in CheckOptions.
 	Nonconforming []Nonconforming `json:"nonconforming,omitempty"`
 }
 
 // Nonconforming is a stored receipt that the current admission rules
 // refuse. Reason is the error Append returns for it, which the server
-// sends with HTTP 422.
+// sends with HTTP 422. PastCheckpoint marks an entry that no signed
+// checkpoint covers yet (an append interrupted before its checkpoint;
+// the server signs one over it when it next opens the directory).
 type Nonconforming struct {
-	Index    uint64 `json:"index"`
-	LeafHash string `json:"leafHash"`
-	Reason   string `json:"reason"`
+	Index          uint64 `json:"index"`
+	LeafHash       string `json:"leafHash"`
+	Reason         string `json:"reason"`
+	PastCheckpoint bool   `json:"pastCheckpoint,omitempty"`
 }
 
-// NonconformingLimit is the most entries CheckReport.Nonconforming
-// lists. The report is one JSON document; a cap keeps it, and Check's
-// memory, bounded on a log of up to 2^53 - 1 entries, while
-// NonconformingCount still counts them all.
-const NonconformingLimit = 1000
+// DefaultNonconformingLimit is the most entries CheckReport.Nonconforming
+// lists when CheckOptions.NonconformingLimit is 0. The report is one
+// JSON document; a cap keeps it, and Check's memory, bounded on a log
+// of up to 2^53 - 1 entries, while NonconformingCount counts them all.
+const DefaultNonconformingLimit = 1000
 
-// nonconformingLimit is NonconformingLimit; tests lower it.
-var nonconformingLimit = NonconformingLimit
+// CheckOptions configures Check. The zero value checks integrity only.
+type CheckOptions struct {
+	// IssuerKeys, when non-empty, makes Check also verify every stored
+	// receipt under them, as Append does.
+	IssuerKeys []ed25519.PublicKey
+	// NonconformingLimit caps CheckReport.Nonconforming; 0 means
+	// DefaultNonconformingLimit.
+	NonconformingLimit int
+}
 
 // Check verifies a data directory without modifying it, as Open does:
 // every entry's checksum and leaf hash, and the checkpoint's signature
@@ -55,15 +66,22 @@ var nonconformingLimit = NonconformingLimit
 // reported, not repaired; the server truncates it when it next opens the
 // directory.
 //
-// With issuer keys, Check also verifies every stored receipt (those
-// past the checkpoint too) as Append does, and reports those that do not verify under any of the keys in
-// the report's Nonconforming fields. Such entries are not an integrity
-// error: they were admitted under older rules, and the log keeps them.
-// An integrity error is returned as without issuer keys.
-func Check(dir, logID string, pub ed25519.PublicKey, issuerKeys ...ed25519.PublicKey) (CheckReport, error) {
+// With opts.IssuerKeys, Check also verifies every stored receipt (those
+// past the checkpoint too) as Append does, and reports those that do
+// not verify under any of the keys in the report's Nonconforming
+// fields. Such entries are not an integrity error: they were admitted
+// under older rules, and the log keeps them. An integrity error is
+// returned as without issuer keys.
+func Check(dir, logID string, pub ed25519.PublicKey,
+	opts CheckOptions) (CheckReport, error) {
 	var rep CheckReport
+	issuerKeys := opts.IssuerKeys
 	if err := validateIssuerKeys(issuerKeys); err != nil {
 		return rep, err
+	}
+	limit := opts.NonconformingLimit
+	if limit <= 0 {
+		limit = DefaultNonconformingLimit
 	}
 	data, err := store.ReadCheckpoint(dir)
 	if err != nil {
@@ -88,7 +106,7 @@ func Check(dir, logID string, pub ed25519.PublicKey, issuerKeys ...ed25519.Publi
 	var tree merkle.Tree
 	var bad []Nonconforming
 	var badCount uint64
-	res, err := store.Scan(f, st.Size(), store.HardMaxPayload, ck.TreeSize, func(i uint64, leaf merkle.Hash, payload []byte) error {
+	visit := func(i uint64, leaf merkle.Hash, payload []byte) error {
 		if err := checkEntry(leaf, payload); err != nil {
 			return err
 		}
@@ -96,14 +114,15 @@ func Check(dir, logID string, pub ed25519.PublicKey, issuerKeys ...ed25519.Publi
 		if len(issuerKeys) > 0 {
 			if _, _, err := verifyReceipt(payload, issuerKeys); err != nil {
 				badCount++
-				if len(bad) < nonconformingLimit {
-					bad = append(bad,
-						Nonconforming{Index: i, LeafHash: leaf.String(), Reason: err.Error()})
+				if len(bad) < limit {
+					bad = append(bad, Nonconforming{Index: i, LeafHash: leaf.String(),
+						Reason: err.Error(), PastCheckpoint: i >= ck.TreeSize})
 				}
 			}
 		}
 		return nil
-	})
+	}
+	res, err := store.Scan(f, st.Size(), store.HardMaxPayload, ck.TreeSize, visit)
 	if err != nil {
 		return rep, err
 	}
@@ -111,9 +130,11 @@ func Check(dir, logID string, pub ed25519.PublicKey, issuerKeys ...ed25519.Publi
 	rep.CheckpointSize = ck.TreeSize
 	rep.RootHash = ck.RootHash
 	rep.Timestamp = ck.Timestamp
-	rep.IssuerKeys = len(issuerKeys)
-	rep.NonconformingCount = badCount
-	rep.Nonconforming = bad
+	if len(issuerKeys) > 0 {
+		rep.IssuerKeys = len(issuerKeys)
+		rep.NonconformingCount = &badCount
+		rep.Nonconforming = bad
+	}
 	if res.TornAt >= 0 {
 		rep.TornTailBytes = st.Size() - res.TornAt
 	}

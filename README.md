@@ -108,10 +108,15 @@ dist/receipts-log check  -data ./data -log-id example-log -log-public-key log.pu
 inclusion proof for the receipt's leaf and verifies it. `check` verifies a data
 directory offline without changing it: every record's checksum and leaf hash,
 and the checkpoint's signature, log ID and root. With `-issuer-key` (repeatable,
-the same files as `serve`) it also verifies every stored receipt exactly as the
-server admits receipts now, and adds `issuerKeys`, `nonconformingCount` and
-`nonconforming` (index, leaf hash and the refusal reason of each, the first
-1000 in index order) to its report. Exit codes: 0 intact (and, with
+the same files as `serve`) it also verifies every stored receipt, including any
+past the checkpoint, exactly as the server admits receipts now (the entry size
+limit apart). `check` takes issuer keys only from `-issuer-key`; it ignores
+`RECEIPTS_LOG_ISSUER_KEYS`. With `-issuer-key` the report always has
+`issuerKeys` and `nonconformingCount` (0 when every receipt passes), and has
+`nonconforming` when the count is not 0: the index, leaf hash and refusal
+reason of each, the first 1000 in index order, with `"pastCheckpoint": true` on
+an entry no signed checkpoint covers yet. Without `-issuer-key` none of these
+fields appears. Exit codes: 0 intact (and, with
 `-issuer-key`, every receipt passes), 1 the store is corrupt or the checkpoint
 does not verify (reported first, whatever the receipts), 2 usage or
 configuration error, 3 the store is intact but holds receipts that admission
@@ -122,10 +127,11 @@ the issuer keys the server is configured with. The log is append-only, so a
 receipt admitted under older rules stays in it; the server still opens and
 serves such a store. For example, receipts-log builds before the sync with
 verifiable-receipts fd2390b admitted a receipt whose `contentHash` is `""`;
-`check` reports it with the reason `contentHash mismatch with canonical bytes`.
-A receipt that verifies under none of the keys given (for instance an issuer key
-you no longer configure) is reported too, with the reason a submission of it
-gets today.
+`check` reports it with the reason `receipt signature does not verify under any
+configured issuer key: contentHash mismatch with canonical bytes`. A receipt
+that verifies under none of the keys given (for instance an issuer key you no
+longer configure) is reported too, with the reason a submission of it gets
+today, the 422 `error` of `POST /v1/entries`.
 
 Run a witness, once or as a daemon (default interval one hour):
 
