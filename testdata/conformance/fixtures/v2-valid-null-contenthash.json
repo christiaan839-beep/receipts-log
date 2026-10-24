@@ -1,0 +1,11 @@
+{
+  "description": "v2 valid — contentHash is null (null means no hash, as if the field were absent)",
+  "receipt": {
+    "canonical": "{\"agentSlug\":\"loan-underwriter\",\"issuedAt\":\"2026-05-18T10:00:00Z\",\"overall\":\"pass\",\"rules\":[{\"ruleId\":\"hipaa-no-raw-ssn\",\"verdict\":\"pass\",\"durationMs\":2}],\"runId\":\"run_conformance_001\",\"tokenId\":\"tok_001\",\"verdictId\":\"v_conf_001\"}",
+    "contentHash": null,
+    "signature": "v2=AATu6RejNeHxufR/Jlu5ITwSmElUxyqaU6zZjsWnx0xflfDqx6DrFHBuyuhEhi0qV95O6xnjj9JVyUrR+vl/Ag=="
+  },
+  "expected": {
+    "ok": true
+  }
+}

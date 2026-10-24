@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # The verifiable-receipts commit the cross-checks run against.
-      VR_REF: 732fce9d4d050a0acdaa2c004a08f57af4c5ec5c
+      VR_REF: fd2390b5cd30fb3c31c41810195ab7ec5ed51702
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

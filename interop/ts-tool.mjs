@@ -1,6 +1,7 @@
 // ts-tool.mjs — runs the verifiable-receipts TypeScript transparency
-// module (src/transparency.ts, loaded with Node's type stripping) over a
-// JSON job read from stdin, and prints the results as JSON.
+// module (src/transparency.ts, loaded with Node's type stripping through
+// ts-src.mjs) over a JSON job read from stdin, and prints the results as
+// JSON.
 //
 // Usage: node ts-tool.mjs <verifiable-receipts checkout> < job.json
 //
@@ -12,11 +13,11 @@
 //   logPublicKeyPem: "..."                            verifies the STHs
 // }
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createPublicKey, verify } from "node:crypto";
+import { tsSources } from "./ts-src.mjs";
 
 const repo = process.argv[2];
-const t = await import(join(repo, "packages/verifiable-receipts/src/transparency.ts"));
+const t = await import(tsSources(repo)("transparency.ts"));
 const job = JSON.parse(readFileSync(0, "utf8"));
 const leaves = job.leaves ?? [];
 const out = {};

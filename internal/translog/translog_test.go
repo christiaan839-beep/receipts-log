@@ -199,7 +199,7 @@ func TestConformanceReceipts(t *testing.T) {
 			t.Errorf("%s: err=%v, expected ok=%v", filepath.Base(f), err, fx.Expected.OK)
 		}
 	}
-	// Both valid fixtures share one canonical, so they are one entry.
+	// The valid fixtures share one canonical, so they are one entry.
 	if l.STH().TreeSize != 1 {
 		t.Fatalf("tree size %d", l.STH().TreeSize)
 	}

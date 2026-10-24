@@ -7,28 +7,16 @@
 // Prints "listening <port>" once ready. Extra test routes:
 //   POST /test/append  {"data": "<string>"}   append one leaf
 //   POST /test/reset   {"leaves": ["..."]}    replace the log (a fork)
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createPrivateKey, sign } from "node:crypto";
+import { tsSources } from "./ts-src.mjs";
 
 const [repo, keyPath, logId] = process.argv.slice(2);
-const src = join(repo, "packages/verifiable-receipts/src");
-// log-store.ts imports "./transparency.js", the name of the compiled
-// file. Load a copy whose import names the .ts source instead, so the
-// package needs no build; the checkout is not modified.
-const work = mkdtempSync(join(tmpdir(), "ts-log-"));
-process.on("exit", () => rmSync(work, { recursive: true, force: true }));
 for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => process.exit(0));
-const transparencyUrl = pathToFileURL(join(src, "transparency.ts")).href;
-writeFileSync(
-  join(work, "log-store.ts"),
-  readFileSync(join(src, "log-store.ts"), "utf8").replace('"./transparency.js"', JSON.stringify(transparencyUrl)),
-);
-const { TransparencyLog, InMemoryLogStore } = await import(pathToFileURL(join(work, "log-store.ts")).href);
-const { canonicalizeSth } = await import(transparencyUrl);
+const source = tsSources(repo);
+const { TransparencyLog, InMemoryLogStore } = await import(source("log-store.ts"));
+const { canonicalizeSth } = await import(source("transparency.ts"));
 const key = createPrivateKey(readFileSync(keyPath, "utf8"));
 
 let log = new TransparencyLog(logId, new InMemoryLogStore());
