@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 R is the identity spelt y = p + 1, a non-canonical encoding, S = k*a; the cofactorless equation holds once R is reduced. Before: rejected, signature does not verify under the supplied public key",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4kZ3/6NZR+jhRWdyzUUtrULpy4l8YkQbQVKYgQNm6pA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"r-noncanonical\"}",
+    "contentHash": "sha256:4182f031e1209fb4bb2d130397ebd9f5b920e80df7d60be49846f40a6cd3299f",
+    "signature": "v2=7v///////////////////////////////////////3+7vkKGCj2oK704wnvJCCqZ0irgBX2RO7So1NMM07+xCg=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "signature R is not a canonical encoding"
+  }
+}

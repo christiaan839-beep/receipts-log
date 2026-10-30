@@ -596,7 +596,12 @@ func TestFixturesAndVerifierCopiesMatchCheckout(t *testing.T) {
 	if !bytes.Equal(a, b) {
 		t.Error("public-key.pem differs")
 	}
-	for _, name := range []string{"verify.go", "transparency.go", "contenthash_test.go", "nesting_test.go", "key_test.go"} {
+	copied := []string{
+		"verify.go", "transparency.go", "edwards25519.go",
+		"contenthash_test.go", "nesting_test.go", "edwards25519_test.go", "strict_ed25519_test.go",
+		"key_test.go",
+	}
+	for _, name := range copied {
 		orig, _ := os.ReadFile(filepath.Join(repo, "packages/verifiable-receipts-go", name))
 		copied, _ := os.ReadFile(filepath.Join("../internal/vaos", name))
 		i := bytes.Index(copied, []byte("\n\n"))

@@ -43,7 +43,9 @@ The signature covers the UTF-8 bytes of `canonical`: the keys `logId`,
 `rootHash`, `timestamp`, `treeSize`, `v` in that order, written as JavaScript's
 `JSON.stringify` writes them. `canonical` is included so clients need not
 rebuild it; a verifier should rebuild it from the other fields and compare.
-`timestamp` is in the form of `Date.prototype.toISOString` and never decreases.
+`timestamp` is in the form of `Date.prototype.toISOString` and never decreases. The log checks every
+signature it makes under the strict Ed25519 profile of VAOS 2.0 §7.3, by which
+the verifiable-receipts witness CLI checks tree heads.
 
 ## Limits
 
@@ -91,9 +93,14 @@ inside a well-formed receipt; its depth is checked by the verifier after the
 signature, so a deep canonical is a verification outcome (422), like a
 signature that does not verify.
 
-The issuer keys themselves are checked when the log starts: it refuses an
-Ed25519 key that is a point of small order or a non-canonical encoding
-(VAOS 2.0 §7.3), under which one signature can verify every receipt.
+The signature is checked under the strict Ed25519 profile of VAOS 2.0 §7.3:
+before `crypto/ed25519` checks the equation, the signature's R must be a
+canonical encoding of a point of order L (not of small order, the identity
+included, and not of mixed order) and its S below L. The issuer keys
+themselves are checked when the log starts: it refuses an Ed25519 key that is
+not a canonical encoding of a point of order L (of small order, non-canonical,
+off the curve or of mixed order). Under a small-order key one signature can
+verify every receipt; under a mixed-order key verifiers disagree.
 
 | Status | Meaning |
 | --- | --- |
@@ -121,7 +128,11 @@ verifiable-receipts verifiers' reason, among them:
 | `signature base64 invalid: not canonical` | has a signature that decodes but re-encodes differently |
 | `contentHash must be a string` | has a `contentHash` that is neither a string nor `null` |
 | `contentHash mismatch with canonical bytes` | has a `contentHash` string that is not the canonical's hash |
-| `signature does not verify under the supplied public key` | is not signed by the key |
+| `signature R is not a canonical encoding` | has a signature whose R encodes a y of p or more |
+| `signature R is not a point on the curve` | has a signature whose R has no x on the curve |
+| `signature R is a small-order point` | has a signature whose R is of small order, the identity included |
+| `signature R is not in the prime-order subgroup` | has a signature whose R is of mixed order |
+| `signature does not verify under the supplied public key` | is not signed by the key, or has a signature whose S is L or more |
 | `canonical nesting deeper than 64` | has a `canonical` whose text nests deeper than 64 |
 
 ### `GET /v1/entries/{index}`
@@ -200,7 +211,8 @@ A witness submits its signature over an STH:
 ```
 
 The log records it when `witnessId` is configured (`-witness-key NAME=FILE`),
-the signature verifies under that witness's key, `sthCanonical` is in canonical
+the signature verifies under that witness's key (under the strict Ed25519
+profile of VAOS 2.0 §7.3, as for receipts), `sthCanonical` is in canonical
 form, and it names this log and a root this log had at that tree size.
 Cosignatures are stored durably; a repeated submission is not stored twice.
 
@@ -216,7 +228,7 @@ Cosignatures are stored durably; a repeated submission is not stored twice.
 | 409 | The tree head is not one this log produced |
 | 413 | Body larger than 64 KiB |
 | 415 | Content type other than `application/json` |
-| 422 | The witness signature does not verify |
+| 422 | The witness signature does not verify; `error` is `witness signature does not verify: ` and the reason, one of the signature reasons of `POST /v1/entries` or `signature is not v2`, `signature is not base64 of 64 bytes`, `signature is not canonical base64` |
 | 503 | The log is read-only after a storage failure, or busy |
 
 ### `GET /v1/cosignatures?treeSize=<n>`

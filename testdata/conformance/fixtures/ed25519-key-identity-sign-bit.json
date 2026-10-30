@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 A is the identity with the sign bit set (x = 0, a non-canonical encoding), R = identity, S = 0. Before: refused as a small-order key (the blocklist)",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"key-identity-sign-bit\"}",
+    "contentHash": "sha256:475ba3e4fd5a1082f616d127cb8b1d9b447bdde9a71934241413698af6d3eb3f",
+    "signature": "v2=AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "public key is a small-order point"
+  }
+}

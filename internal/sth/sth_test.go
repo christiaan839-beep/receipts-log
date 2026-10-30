@@ -4,12 +4,19 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
+	"github.com/christiaan839-beep/receipts-log/internal/testutil"
 )
 
 func testKey(t testing.TB) ed25519.PrivateKey {
@@ -215,4 +222,107 @@ func FuzzVerify(f *testing.F) {
 	f.Fuzz(func(t *testing.T, logID string, size uint64, root, ts, sig string) {
 		_ = Verify(STH{V: 1, LogID: logID, TreeSize: size, RootHash: root, Timestamp: ts, Signature: sig}, pub)
 	})
+}
+
+// Every Ed25519 vector of the verifiable-receipts conformance corpus
+// (ed25519-*.json) through VerifyBytes, with the fixture's key as it is,
+// weak or not: tree heads and cosignatures are checked under the strict
+// profile of VAOS 2.0 section 7.3, with the verifiers' reasons.
+func TestVerifyBytesStrictEd25519Fixtures(t *testing.T) {
+	files, _ := filepath.Glob("../../testdata/conformance/fixtures/ed25519-*.json")
+	if len(files) < 20 {
+		t.Fatalf("found %d ed25519 fixtures", len(files))
+	}
+	for _, f := range files {
+		name := filepath.Base(f)
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fx struct {
+			PublicKeyPem string `json:"publicKeyPem"`
+			Receipt      struct {
+				Canonical string `json:"canonical"`
+				Signature string `json:"signature"`
+			} `json:"receipt"`
+			Ed25519 struct {
+				PublicKey, Message, Signature string
+			} `json:"ed25519"`
+			Expected struct {
+				OK             bool   `json:"ok"`
+				ReasonContains string `json:"reasonContains"`
+			} `json:"expected"`
+		}
+		if err := json.Unmarshal(raw, &fx); err != nil {
+			t.Fatal(err)
+		}
+		var pub ed25519.PublicKey
+		var msg []byte
+		var wire string
+		if fx.PublicKeyPem != "" {
+			block, _ := pem.Decode([]byte(fx.PublicKeyPem))
+			k, err := x509.ParsePKIXPublicKey(block.Bytes)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			pub, msg, wire = k.(ed25519.PublicKey), []byte(fx.Receipt.Canonical), fx.Receipt.Signature
+		} else {
+			p, _ := hex.DecodeString(fx.Ed25519.PublicKey)
+			m, _ := hex.DecodeString(fx.Ed25519.Message)
+			sig, _ := hex.DecodeString(fx.Ed25519.Signature)
+			pub, msg, wire = p, m, EncodeSignature(sig)
+		}
+		err = VerifyBytes(msg, wire, pub)
+		if (err == nil) != fx.Expected.OK {
+			t.Errorf("%s: %v, want ok=%v", name, err, fx.Expected.OK)
+			continue
+		}
+		if err != nil && (!errors.Is(err, ErrSignature) || !strings.Contains(err.Error(), fx.Expected.ReasonContains)) {
+			t.Errorf("%s: %v, want ErrSignature with %q", name, err, fx.Expected.ReasonContains)
+		}
+	}
+}
+
+// R = identity with S = k*a: crypto/ed25519 accepts it, VerifyBytes does
+// not, so neither does Verify for a tree head.
+func TestVerifyRefusesIdentityR(t *testing.T) {
+	key := testKey(t)
+	pub := key.Public().(ed25519.PublicKey)
+	s := New("log", 1, merkle.EmptyRoot(), time.Now())
+	c, _ := s.Canonical()
+	sig := testutil.IdentityRSignature(key, c)
+	if !ed25519.Verify(pub, c, sig) {
+		t.Fatal("crypto/ed25519 rejects the identity-R signature; the test is broken")
+	}
+	s.Signature = EncodeSignature(sig)
+	if err := Verify(s, pub); !errors.Is(err, ErrSignature) || !strings.Contains(err.Error(), "signature R is a small-order point") {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
+// SignBytes, and so Sign, refuse a key whose public half does not match
+// its seed or is not a point of order L.
+func TestSignRefusesInconsistentOrWeakKeys(t *testing.T) {
+	good := testKey(t)
+	other := testKey(t)
+	mismatched := append(append(ed25519.PrivateKey{}, good.Seed()...), other.Public().(ed25519.PublicKey)...)
+	identity := append(append(ed25519.PrivateKey{}, good.Seed()...), append([]byte{1}, make([]byte, 31)...)...)
+	for name, c := range map[string]struct {
+		key    ed25519.PrivateKey
+		reason string
+	}{
+		"mismatched public half": {mismatched, "signature does not verify under the supplied public key"},
+		"identity public half":   {identity, "public key is a small-order point"},
+		"short":                  {good[:10], "not an Ed25519 private key"},
+	} {
+		if _, err := SignBytes([]byte("m"), c.key); !errors.Is(err, ErrSignature) || !strings.Contains(err.Error(), c.reason) {
+			t.Errorf("%s: SignBytes: %v, want %q", name, err, c.reason)
+		}
+		if _, err := Sign(New("log", 0, merkle.EmptyRoot(), time.Now()), c.key); err == nil {
+			t.Errorf("%s: Sign accepted the key", name)
+		}
+	}
+	if _, err := SignBytes([]byte("m"), good); err != nil {
+		t.Fatal(err)
+	}
 }

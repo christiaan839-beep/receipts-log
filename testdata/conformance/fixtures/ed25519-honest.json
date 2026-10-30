@@ -1,0 +1,12 @@
+{
+  "description": "v2 valid (strict Ed25519) \u2014 an honest signature under an ordinary key; the cofactorless and cofactored equations both hold. Before: valid everywhere",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4kZ3/6NZR+jhRWdyzUUtrULpy4l8YkQbQVKYgQNm6pA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"honest\"}",
+    "contentHash": "sha256:92e5ada238a3fd53ec5536b24680246b2bbef3e242f65796bc8887bed1b3624e",
+    "signature": "v2=/n0HfE7mZx8MYrXIbhfhh52v8MXcSU/DULZr+xUEfU39RqKUYj7S618qhzMzr9Wr5RMy9TwQxrrTC04wH48HAw=="
+  },
+  "expected": {
+    "ok": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 R is a point of order 4, S = k*a, ordinary key; only the cofactored equation holds. Before: rejected, signature does not verify",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4kZ3/6NZR+jhRWdyzUUtrULpy4l8YkQbQVKYgQNm6pA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"r-order-4\"}",
+    "contentHash": "sha256:952b6ad38bbeceffd1a5ff36c0eeed186645b7048e86af76ddc4dbdea58cbb80",
+    "signature": "v2=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAyk83HCfBYtdMXxvjTJwPHgVUHd06EiGlGSnFWYps7BQ=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "signature R is a small-order point"
+  }
+}

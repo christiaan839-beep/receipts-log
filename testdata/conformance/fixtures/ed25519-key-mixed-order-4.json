@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 A = [a]B + T4 (mixed order), R = [r]B, S = r + k*a, k != 0 mod 4; only the cofactored equation holds. Before: rejected, signature does not verify under the supplied public key",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA6oLsILT4smumNZrsNoKD8SXLbYNV2dTx69ot3XePDYk=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":1,\"vector\":\"key-mixed-order-4\"}",
+    "contentHash": "sha256:d54ca453e6c62501605d3994582d5613043e2eb3f63f633836585124d8467856",
+    "signature": "v2=/n0HfE7mZx8MYrXIbhfhh52v8MXcSU/DULZr+xUEfU3wuK6fzlO10J5U3QSkz+Q8L4DWBGtBX48Fed8m3Zr9CA=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "public key is not in the prime-order subgroup"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 S + L, which satisfies the same equation, is rejected because S >= L. Before: rejected the same way",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4kZ3/6NZR+jhRWdyzUUtrULpy4l8YkQbQVKYgQNm6pA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"s-plus-l\"}",
+    "contentHash": "sha256:a450138f6cc459353d9d520f16eafd21b29f215b9c6d5beeaf7b068373cae19e",
+    "signature": "v2=/n0HfE7mZx8MYrXIbhfhh52v8MXcSU/DULZr+xUEfU2+o67hydp1z9C6Dd4Qxd/ClHI15kkUNDiBBbbC9XJDFg=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "signature does not verify under the supplied public key"
+  }
+}

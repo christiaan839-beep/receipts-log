@@ -193,7 +193,7 @@ func fixtureKey(t *testing.T, text string) ed25519.PublicKey {
 	return k.(ed25519.PublicKey)
 }
 
-// The v2 fixtures of the verifiable-receipts conformance corpus: the
+// The v2 and Ed25519 receipt fixtures of the verifiable-receipts conformance corpus: the
 // valid ones are admitted, the invalid ones refused, for the reason the
 // fixture names. A receipt given as text is posted as that text; a
 // fixture with its own key is checked by a log configured with that key,
@@ -214,6 +214,21 @@ func TestConformanceReceipts(t *testing.T) {
 	files, _ := filepath.Glob("../../testdata/conformance/fixtures/v2-*.json")
 	if len(files) < 8 {
 		t.Fatalf("found %d v2 fixtures", len(files))
+	}
+	// The Ed25519 fixtures given as receipts (the strict profile of VAOS
+	// 2.0 section 7.3), each with its own key; those given as raw
+	// signatures are sth's (TestVerifyBytesStrictEd25519Fixtures).
+	edFiles, _ := filepath.Glob("../../testdata/conformance/fixtures/ed25519-*.json")
+	var edReceipts int
+	for _, f := range edFiles {
+		raw, _ := os.ReadFile(f)
+		if strings.Contains(string(raw), `"receipt"`) {
+			files = append(files, f)
+			edReceipts++
+		}
+	}
+	if edReceipts < 15 {
+		t.Fatalf("found %d ed25519 receipt fixtures", edReceipts)
 	}
 	var withText, withKey int
 	for _, f := range files {

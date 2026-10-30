@@ -12,7 +12,9 @@
 // with the keys in that order and no whitespace, exactly as JavaScript's
 // JSON.stringify writes it. The signature is "v2=" followed by the
 // standard base64 of the Ed25519 signature over the canonical's UTF-8
-// bytes.
+// bytes. Signatures are checked under the strict Ed25519 profile of VAOS
+// 2.0 section 7.3 (vaos.VerifyEd25519), the rule the verifiable-receipts
+// verifiers and its witness CLI apply to tree heads.
 package sth
 
 import (
@@ -28,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
+	"github.com/christiaan839-beep/receipts-log/internal/vaos"
 )
 
 // Version is the only STH version defined by the specification.
@@ -192,8 +195,28 @@ func Sign(s STH, key ed25519.PrivateKey) (STH, error) {
 	if err != nil {
 		return STH{}, err
 	}
-	s.Signature = EncodeSignature(ed25519.Sign(key, c))
+	sig, err := SignBytes(c, key)
+	if err != nil {
+		return STH{}, err
+	}
+	s.Signature = sig
 	return s, nil
+}
+
+// SignBytes signs msg with key and returns the v2 wire signature. It
+// checks the signature as VerifyBytes does before returning it, so it
+// refuses a key whose public half is not a point of order L (VAOS 2.0
+// section 7.3) or does not match its seed: every strict verifier
+// accepts what it returns.
+func SignBytes(msg []byte, key ed25519.PrivateKey) (string, error) {
+	if len(key) != ed25519.PrivateKeySize {
+		return "", fmt.Errorf("%w: signing key is not an Ed25519 private key", ErrSignature)
+	}
+	sig := ed25519.Sign(key, msg)
+	if res := vaos.VerifyEd25519(key.Public().(ed25519.PublicKey), msg, sig); !res.OK {
+		return "", fmt.Errorf("%w: signing key: %s", ErrSignature, res.Reason)
+	}
+	return EncodeSignature(sig), nil
 }
 
 // EncodeSignature returns the v2 wire form of an Ed25519 signature.
@@ -229,14 +252,19 @@ func Verify(s STH, pub ed25519.PublicKey) error {
 	return VerifyBytes(c, s.Signature, pub)
 }
 
-// VerifyBytes checks a v2 wire signature over msg under pub.
+// VerifyBytes checks a v2 wire signature over msg under pub, under the
+// strict Ed25519 profile of VAOS 2.0 section 7.3: pub and the
+// signature's R must be canonical encodings of points of order L, and
+// its S below L, before crypto/ed25519 checks it (vaos.VerifyEd25519).
+// The error wraps ErrSignature and ends with the verifier's reason, such
+// as "signature R is a small-order point".
 func VerifyBytes(msg []byte, wire string, pub ed25519.PublicKey) error {
 	sig, err := DecodeSignature(wire)
 	if err != nil {
 		return err
 	}
-	if len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, msg, sig) {
-		return ErrSignature
+	if res := vaos.VerifyEd25519(pub, msg, sig); !res.OK {
+		return fmt.Errorf("%w: %s", ErrSignature, res.Reason)
 	}
 	return nil
 }
