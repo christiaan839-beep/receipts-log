@@ -3,13 +3,14 @@
 `verify.go`, `transparency.go` and `edwards25519.go` are copies of the Go
 verifier in
 [verifiable-receipts](https://github.com/christiaan839-beep/verifiable-receipts)
-(`packages/verifiable-receipts-go`, commit `f41348eac297c81e1c2a0dca91b7bd49dd2a5d9a`),
+(`packages/verifiable-receipts-go`, commit `4d9943a99376527f742dcfdf93652ed040a51b43`),
 licensed Apache-2.0, and `contenthash_test.go`, `nesting_test.go`,
 `key_test.go`, `edwards25519_test.go` and `strict_ed25519_test.go` are copies
 of its tests from the same commit. The only change is
 a provenance notice at the top of each file. `fixtures_test.go` gives the
 copied tests what they expect from the rest of that package's tests (the
-fixture paths, here this repository's copies, and two key helpers).
+fixture paths, here this repository's copies, a fixture's expected verdict
+and two key helpers).
 
 `VerifyV2Receipt` gives every signature one valid string form: the text
 must have the shape of padded standard base64, which refuses CR and LF that
@@ -80,3 +81,11 @@ with it. `LoadEd25519PublicKeyFromPEM`, and so `internal/keys.CheckPublicKey`,
 refuse the new keys too. The fixtures `ed25519-*.json` are copied into
 `testdata/conformance/fixtures/`: the admission tests run those given as
 receipts, and `internal/sth` runs all of them through `VerifyBytes`.
+
+Since 4d9943a the two pre-checks of `VerifyEd25519` are exported:
+`Ed25519PublicKeyProblem(pub)` (the key, cached per key; a key that is not 32
+bytes gets `public key is not 32 bytes`) and `Ed25519SignatureProblem(sig)`
+(R and S), each returning the reason or `""`, in the same order and with the
+same reasons as before. The log's admission (`verifyIssued` in
+`internal/translog`) uses them so that the checks that depend only on the
+signature run once per receipt, not once per issuer key.

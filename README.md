@@ -115,7 +115,7 @@ dist/receipts-log append -url http://localhost:8080 -file receipt.json
 dist/receipts-log sth    -url http://localhost:8080 -log-public-key log.pub
 dist/receipts-log prove  -url http://localhost:8080 -file receipt.json -log-public-key log.pub
 dist/receipts-log check  -data ./data -log-id example-log -log-public-key log.pub \
-  [-issuer-key issuer.pem]
+  [-issuer-key issuer.pem] [-witness-key w1=w1.pub]
 ```
 
 `prove` fetches the signed tree head, checks its signature, fetches the
@@ -130,14 +130,23 @@ limit apart). `check` takes issuer keys only from `-issuer-key`; it ignores
 `nonconforming` when the count is not 0: the index, leaf hash and refusal
 reason of each, the first 1000 in index order, with `"pastCheckpoint": true` on
 an entry no signed checkpoint covers yet. Without `-issuer-key` none of these
-fields appears. Exit codes: 0 intact (and, with
-`-issuer-key`, every receipt passes), 1 the store is corrupt or the checkpoint
-does not verify (reported first, whatever the receipts), 2 usage or
+fields appears. With `-witness-key NAME=FILE` (repeatable, the same values as
+`serve`) it also verifies every stored cosignature with the key of its
+witness, as the server checks one submitted today, and the report has
+`witnessKeys`, `cosignatures`, `nonconformingCosignatureCount` and, when that
+is not 0, `nonconformingCosignatures`: the line in `cosignatures.jsonl` (from
+0), witness ID, tree size and refusal reason of each, `witness signature does
+not verify: <reason>` or `witness is not configured on this log`. The server
+loads stored cosignatures without verifying them, so only `check` reports
+these. Exit codes: 0 intact (and, with `-issuer-key`, every receipt passes,
+and with `-witness-key`, every cosignature), 1 the store is corrupt or the
+checkpoint does not verify (reported first, whatever the receipts), 2 usage or
 configuration error, 3 the store is intact but holds receipts that admission
-now refuses.
+now refuses (whatever the cosignatures), 4 the store is intact and its
+receipts pass but it holds cosignatures the log now refuses.
 
-**After upgrading**, run `check -issuer-key …` against each data directory, with
-the issuer keys the server is configured with. The log is append-only, so a
+**After upgrading**, run `check -issuer-key … -witness-key …` against each data
+directory, with the issuer and witness keys the server is configured with. The log is append-only, so a
 receipt admitted under older rules stays in it; the server still opens and
 serves such a store. For example, receipts-log builds before the sync with
 verifiable-receipts fd2390b admitted a receipt whose `contentHash` is `""`;
@@ -180,7 +189,9 @@ now lists each receipt it signed with `… signature does not verify under the
 supplied public key`. `check` refuses the old key itself, as `serve` does. A
 cosignature whose signature fails the profile is refused with 422 and its
 reason, `witness signature does not verify: signature R is a small-order
-point` for one.
+point` for one. Those builds recorded such a cosignature; the store still
+opens and serves it, and `check -witness-key …` lists it with that reason
+(exit 4).
 
 Run a witness, once or as a daemon (default interval one hour):
 

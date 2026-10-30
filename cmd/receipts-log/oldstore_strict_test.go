@@ -33,6 +33,11 @@ import (
 // strict profile of VAOS 2.0 section 7.3 refuses both. A store holding
 // them must still open, serve and prove them, and check must report them
 // as nonconforming (exit 3), not as corruption.
+//
+// Those builds recorded a witness's cosignature after the same check, so
+// they recorded one whose R is the identity too. The log loads stored
+// cosignatures without verifying them: the store must still open and
+// serve it, and check -witness-key must report it (exit 4).
 
 // The conformance fixtures the stored receipts are, in store order.
 var strictOldFixtures = []string{
@@ -50,6 +55,12 @@ type strictOldStore struct {
 	bodies              [][]byte
 	leaves              []merkle.Hash
 	receiptFiles        []string
+	// Two pinned witnesses: w1 cosigned the checkpoint honestly, w2 with
+	// an R that is the identity.
+	witnessKeys       map[string]ed25519.PublicKey
+	witnessFlags      []string // -witness-key NAME=FILE values
+	headSize          uint64
+	identityRCosigSig string
 }
 
 // rawPublicKey parses an SPKI PEM Ed25519 key without the key rule, as
@@ -134,6 +145,41 @@ func newStrictOldStore(t *testing.T) *strictOldStore {
 	if err := st.WriteCheckpoint(ck); err != nil {
 		t.Fatal(err)
 	}
+	canonical, err := head.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.witnessKeys = map[string]ed25519.PublicKey{}
+	o.headSize = head.TreeSize
+	for _, id := range []string{"w1", "w2"} {
+		wk := testutil.Key(t)
+		pub := wk.Public().(ed25519.PublicKey)
+		sig := ed25519.Sign(wk, canonical)
+		if id == "w2" {
+			sig = testutil.IdentityRSignature(wk, canonical)
+			// What older builds checked: crypto/ed25519 accepts it.
+			if !ed25519.Verify(pub, canonical, sig) {
+				t.Fatal("crypto/ed25519 rejects the identity-R cosignature, so no older build recorded it")
+			}
+			o.identityRCosigSig = sth.EncodeSignature(sig)
+		}
+		line, _ := json.Marshal(translog.Cosignature{WitnessID: id, TreeSize: head.TreeSize, RootHash: head.RootHash,
+			Timestamp: head.Timestamp, STHCanonical: string(canonical), Signature: sth.EncodeSignature(sig),
+			ReceivedAt: head.Timestamp})
+		if err := st.AppendCosignature(line); err != nil {
+			t.Fatal(err)
+		}
+		pemData, err := keys.PublicKeyPEM(pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := filepath.Join(dir, id+".pub")
+		if err := os.WriteFile(f, pemData, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		o.witnessKeys[id] = pub
+		o.witnessFlags = append(o.witnessFlags, id+"="+f)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -148,12 +194,12 @@ func newStrictOldStore(t *testing.T) *strictOldStore {
 	return o
 }
 
-// open opens the store with the honest issuer key: the mixed-order key
-// can no longer be configured.
+// open opens the store with the honest issuer key (the mixed-order key
+// can no longer be configured) and both witnesses pinned.
 func (o *strictOldStore) open(t *testing.T) (*translog.Log, *httptest.Server) {
 	t.Helper()
 	l, err := translog.Open(translog.Config{Dir: o.dir, LogID: "old-log", Key: o.logKey,
-		IssuerKeys: []ed25519.PublicKey{o.honestKey}})
+		IssuerKeys: []ed25519.PublicKey{o.honestKey}, WitnessKeys: o.witnessKeys})
 	if err != nil {
 		t.Fatalf("Open refuses a store an older build wrote: %v", err)
 	}
@@ -187,6 +233,20 @@ func TestOldStrictReceiptsOpenAndServe(t *testing.T) {
 				t.Errorf("GET %s: %d %.120s", path, resp.StatusCode, body)
 			}
 		}
+	}
+	// Both stored cosignatures are served, the identity-R one included.
+	resp, err := http.Get(fmt.Sprintf("%s/v1/cosignatures?treeSize=%d", srv.URL, o.headSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cos struct {
+		Cosignatures []translog.Cosignature `json:"cosignatures"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&cos)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK || len(cos.Cosignatures) != 2 ||
+		cos.Cosignatures[1].WitnessID != "w2" || cos.Cosignatures[1].Signature != o.identityRCosigSig {
+		t.Errorf("GET /v1/cosignatures: %d %+v %v", resp.StatusCode, cos, err)
 	}
 	// Submitted again, the conforming receipt is a duplicate (200); the
 	// others are refused today, with 422 and the strict profile's reason.
@@ -270,5 +330,52 @@ func TestOldStrictLoadIssuerKeysRefusesMixedOrderKey(t *testing.T) {
 	if _, err := loadIssuerKeys([]string{o.mixedPub}); err == nil ||
 		!strings.Contains(err.Error(), "public key is not in the prime-order subgroup") {
 		t.Fatalf("loadIssuerKeys: %v", err)
+	}
+}
+
+// check -witness-key reports the identity-R cosignature an older build
+// recorded (exit 4), and with -issuer-key too the receipts as well (exit
+// 3, which comes first).
+func TestOldStrictCosignatureCheckNonconforming(t *testing.T) {
+	o := newStrictOldStore(t)
+	base := []string{"check", "-data", o.dir, "-log-id", "old-log", "-log-public-key", o.logPub}
+	var witnessArgs []string
+	for _, f := range o.witnessFlags {
+		witnessArgs = append(witnessArgs, "-witness-key", f)
+	}
+	const reason = "witness signature does not verify: signature R is a small-order point"
+	code, out, e := runCLI(t, append(base, witnessArgs...)...)
+	if code != exitNonconformingCosig || !strings.Contains(e, "1 stored cosignature(s) the log now refuses") {
+		t.Fatalf("check -witness-key: exit %d, want %d: %s %s", code, exitNonconformingCosig, out, e)
+	}
+	var rep translog.CheckReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("report: %v: %s", err, out)
+	}
+	want := translog.NonconformingCosignature{Index: 1, WitnessID: "w2", TreeSize: o.headSize, Reason: reason}
+	if rep.WitnessKeys != 2 || rep.Cosignatures != 2 || rep.NonconformingCosignatureCount == nil ||
+		*rep.NonconformingCosignatureCount != 1 || len(rep.NonconformingCosignatures) != 1 ||
+		rep.NonconformingCosignatures[0] != want || rep.NonconformingCount != nil {
+		t.Fatalf("report: %s", out)
+	}
+
+	code, out, e = runCLI(t, append(append(base, "-issuer-key", o.honestPub), witnessArgs...)...)
+	if code != exitNonconforming || !strings.Contains(e, "2 stored receipt(s) fail the current admission rules; "+
+		"1 stored cosignature(s) the log now refuses") {
+		t.Fatalf("check -issuer-key -witness-key: exit %d, want %d: %s %s", code, exitNonconforming, out, e)
+	}
+	rep = translog.CheckReport{}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil || *rep.NonconformingCount != 2 ||
+		*rep.NonconformingCosignatureCount != 1 {
+		t.Fatalf("report: %v: %s", err, out)
+	}
+
+	// Only the honest witness pinned: the other is no longer configured.
+	code, out, e = runCLI(t, append(base, "-witness-key", o.witnessFlags[0])...)
+	if code != exitNonconformingCosig || !strings.Contains(out, "witness is not configured on this log") {
+		t.Fatalf("check -witness-key w1: exit %d: %s %s", code, out, e)
+	}
+	if code, out, e := runCLI(t, append(base, "-witness-key", "w1")...); code != exitUsage {
+		t.Fatalf("check -witness-key without a file: exit %d: %s %s", code, out, e)
 	}
 }
