@@ -14,6 +14,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -516,6 +517,16 @@ func TestGoWitnessAgainstTypeScriptLog(t *testing.T) {
 			t.Fatalf("verdict %s (%s), want %s", r.Verdict, r.Reason, want)
 		}
 		return r
+	}
+	// A request the harness cannot handle gets a fixed message, not the error.
+	resp, err := http.Post(base+"/test/append", "application/json", strings.NewReader("{not json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 500 || string(raw) != `{"error":"internal error"}` {
+		t.Fatalf("malformed body: %d %s", resp.StatusCode, raw)
 	}
 	expect(witness.Witnessed) // the empty tree
 	for size := 1; size <= 17; size++ {
