@@ -42,10 +42,7 @@ jobs:
   test:
     name: Test
     needs: plan
-    # "./" rather than GitHub's "$/" self-repository syntax, which resolves
-    # to the same commit here: Scorecard (v5.5.0) and actionlint (1.7.12)
-    # do not parse "$/" and report it as an unpinned third-party workflow.
-    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
+    uses: $/.github/workflows/ci.yml
     permissions:
       contents: read # check out the code to test
 
