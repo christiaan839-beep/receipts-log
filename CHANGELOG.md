@@ -6,7 +6,7 @@ Notable changes to receipts-log. The format follows
 
 ## [Unreleased]
 
-## [0.1.0] — 2026-10-29
+## [0.1.0] — 2026-10-30
 
 The first release: a transparency log and witness for verifiable receipts, in
 Go with the standard library only.
