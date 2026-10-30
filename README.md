@@ -275,6 +275,11 @@ the build on Go 1.22 (the `go.mod` minimum), 1.26 and 1.27; staticcheck on
 verifiable-receipts commit; and a container build. Its actions are pinned to
 commit SHAs and its token is read-only.
 
+## Versions
+
+receipts-log follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html);
+`CHANGELOG.md` lists the changes in each release.
+
 ## Licence
 
 Apache-2.0, the licence of verifiable-receipts; see `LICENSE`. The files in

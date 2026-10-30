@@ -14,8 +14,9 @@ Go with the standard library only.
 ### Added
 
 - `receipts-log serve`: admits a receipt only when its Ed25519 `v2=` signature
-  verifies under a configured issuer key, by the rules of the verifiable-receipts
-  Go verifier (copied into `internal/vaos`, at verifiable-receipts 24f5c47).
+  verifies under a configured issuer key, as a VAOS 2.0 receipt or a Guardian
+  attestation, by the rules of the verifiable-receipts Go verifier (copied into
+  `internal/vaos`, at verifiable-receipts 24f5c47).
 - Each receipt is one leaf, `SHA-256(0x00 || canonical)`, of an RFC 6962 /
   RFC 9162 Merkle tree. The server returns entries, Ed25519-signed tree heads,
   inclusion proofs and consistency proofs (`API.md`), and records cosignatures
@@ -27,8 +28,8 @@ Go with the standard library only.
   and its consistency with the last head it signed, cosigns it and submits the
   cosignature.
 - `receipts-log check` checks a store offline, and optionally re-verifies every
-  stored receipt; `keygen`, `append`, `prove` and `sth` cover the rest of the
-  command line.
+  stored receipt; `keygen`, `pubkey`, `append`, `prove` and `sth` cover the rest
+  of the command line.
 - Release archives for Linux and macOS (amd64, arm64) with `SHA256SUMS`, a
   container image at `ghcr.io/christiaan839-beep/receipts-log`, and signed
   build provenance for both (`RELEASING.md`).
