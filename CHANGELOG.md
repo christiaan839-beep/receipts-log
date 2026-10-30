@@ -28,8 +28,8 @@ Go with the standard library only.
   and its consistency with the last head it signed, cosigns it and submits the
   cosignature.
 - `receipts-log check` checks a store offline, and optionally re-verifies every
-  stored receipt; `keygen`, `pubkey`, `append`, `prove` and `sth` cover the rest
-  of the command line.
+  stored receipt; `keygen`, `pubkey`, `append`, `prove`, `sth` and `version`
+  cover the rest of the command line.
 - Release archives for Linux and macOS (amd64, arm64) with `SHA256SUMS`, a
   container image at `ghcr.io/christiaan839-beep/receipts-log`, and signed
   build provenance for both (`RELEASING.md`).

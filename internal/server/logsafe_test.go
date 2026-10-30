@@ -12,6 +12,8 @@ import (
 	"unicode"
 
 	"github.com/christiaan839-beep/receipts-log/internal/sth"
+	"github.com/christiaan839-beep/receipts-log/internal/testutil"
+	"github.com/christiaan839-beep/receipts-log/internal/translog"
 )
 
 func TestLogSafe(t *testing.T) {
@@ -24,7 +26,10 @@ func TestLogSafe(t *testing.T) {
 		"a\u0085b\u2028c":     `a\u0085b\u2028c`,
 		"tab\there":           `tab\u0009here`,
 		"ünïcödé ✓":           "ünïcödé ✓",
-		"\xff":                "�",
+		"\xff":                `\xff`,
+		"\ufffd":              "\ufffd",
+		"a\xffb\xc3":          `a\xffb\xc3`,
+		"a\u2029b":            `a\u2029b`,
 		"x\n{\"level\":\"E\"": `x\n{"level":"E"`,
 	} {
 		got := logSafe(in)
@@ -32,10 +37,17 @@ func TestLogSafe(t *testing.T) {
 			t.Errorf("logSafe(%q) = %q, want %q", in, got, want)
 		}
 		for _, r := range got {
-			if unicode.IsControl(r) || r == '\u2028' || r == ' ' {
+			if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
 				t.Errorf("logSafe(%q) = %q keeps control character %U", in, got, r)
 			}
 		}
+	}
+}
+
+// A real U+FFFD and an invalid byte log differently.
+func TestLogSafeKeepsInvalidUTF8Distinct(t *testing.T) {
+	if a, b := logSafe("\ufffd"), logSafe("\xff"); a == b {
+		t.Fatalf("U+FFFD and 0xff both log as %q", a)
 	}
 }
 
@@ -78,22 +90,37 @@ func TestRequestLogCannotBeForged(t *testing.T) {
 	}
 }
 
-// A witness ID with CR or LF is refused before anything logs it, and a
-// recorded cosignature logs its ID through logSafe.
-func TestCosignatureLogCannotBeForged(t *testing.T) {
-	f := setup(t)
-	var buf bytes.Buffer
-	s, err := New(f.log, Options{Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
+// A configured witness ID may hold a backslash or a C1 control character
+// (sth.ValidLabel allows both); the cosignature line logs it escaped. An ID
+// with LF is refused before anything logs it.
+func TestCosignatureLogEscapesWitnessID(t *testing.T) {
+	witness := testutil.Key(t)
+	ids := map[string]string{`w\1`: `w\\1`, "w\u00852": `w\u00852`}
+	wk := map[string]ed25519.PublicKey{}
+	for id := range ids {
+		wk[id] = witness.Public().(ed25519.PublicKey)
+	}
+	l, err := translog.Open(translog.Config{
+		Dir: t.TempDir(), LogID: "test-log", Key: testutil.Key(t),
+		IssuerKeys:  []ed25519.PublicKey{testutil.Key(t).Public().(ed25519.PublicKey)},
+		WitnessKeys: wk,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := f.log.STH().Canonical()
+	t.Cleanup(func() { l.Close() })
+	var buf bytes.Buffer
+	s, err := New(l, Options{Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := l.STH().Canonical()
 	if err != nil {
 		t.Fatal(err)
 	}
 	cosign := func(id string) int {
 		body, _ := json.Marshal(map[string]string{"witnessId": id, "sthCanonical": string(c),
-			"signature": sth.EncodeSignature(ed25519.Sign(f.witness, c))})
+			"signature": sth.EncodeSignature(ed25519.Sign(witness, c))})
 		req := httptest.NewRequest("POST", "/v1/cosignatures", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -103,16 +130,23 @@ func TestCosignatureLogCannotBeForged(t *testing.T) {
 	if code := cosign("w1\n{\"level\":\"ERROR\",\"msg\":\"forged\"}"); code != http.StatusBadRequest {
 		t.Fatalf("witnessId with LF: %d", code)
 	}
-	if code := cosign("w1"); code != http.StatusOK {
-		t.Fatalf("cosign: %d", code)
+	want := map[any]bool{}
+	for id, esc := range ids {
+		if code := cosign(id); code != http.StatusOK {
+			t.Fatalf("cosign %q: %d", id, code)
+		}
+		want[esc] = true
 	}
-	var ids []any
+	var n int
 	for _, m := range logLines(t, &buf) {
 		if m["msg"] == "cosignature recorded" {
-			ids = append(ids, m["witnessId"])
+			n++
+			if !want[m["witnessId"]] {
+				t.Errorf("witnessId logged as %q", m["witnessId"])
+			}
 		}
 	}
-	if len(ids) != 1 || ids[0] != "w1" {
-		t.Fatalf("cosignature lines: %v in %s", ids, buf.String())
+	if n != len(ids) {
+		t.Fatalf("want %d cosignature lines, got %d in %s", len(ids), n, buf.String())
 	}
 }

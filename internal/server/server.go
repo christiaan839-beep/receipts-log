@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/christiaan839-beep/receipts-log/internal/keys"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
@@ -469,23 +470,28 @@ type cosignRequest struct {
 }
 
 // logSafe escapes a request-derived string before it is logged: a
-// backslash becomes \\, CR and LF become \r and \n, and every other control
-// character (and U+2028, U+2029) becomes \uXXXX. The result holds no line
-// break, so the value cannot end its log line or forge another, whatever
-// the log handler.
+// backslash becomes \\, CR and LF become \r and \n, every other control
+// character (and U+2028, U+2029) becomes \uXXXX, and each byte that is not
+// valid UTF-8 becomes \xNN. The escaping is lossless, and the result holds
+// no line break, so the value cannot end its log line or forge another,
+// whatever the log handler.
 func logSafe(v string) string {
 	var b strings.Builder
-	for _, r := range v {
+	for i := 0; i < len(v); {
+		r, size := utf8.DecodeRuneInString(v[i:])
 		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, v[i])
 		case r == '\\':
 			b.WriteString(`\\`)
 		case r == '\r' || r == '\n':
 			b.WriteRune(r) // escaped below
-		case unicode.IsControl(r) || r == '\u2028' || r == '\u2029':
+		case unicode.IsControl(r) || r == ' ' || r == ' ':
 			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)
 		}
+		i += size
 	}
 	// CR and LF are replaced last, by strings.ReplaceAll, the form CodeQL's
 	// go/log-injection query recognises as sanitising.

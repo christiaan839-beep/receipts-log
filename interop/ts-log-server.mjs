@@ -66,8 +66,8 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/test/cosignatures") return send(res, 200, cosignatures);
     send(res, 404, { error: "not found" });
   } catch (err) {
-    // The detail goes to stderr, which the interop test prints on failure;
-    // the client gets a fixed message.
+    // The client gets a fixed message. The error goes to stderr, which
+    // TestGoWitnessAgainstTypeScriptLog includes in its failure messages.
     console.error("ts-log-server:", err);
     send(res, 500, { error: "internal error" });
   }
