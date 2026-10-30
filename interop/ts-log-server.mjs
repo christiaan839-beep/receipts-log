@@ -66,7 +66,10 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/test/cosignatures") return send(res, 200, cosignatures);
     send(res, 404, { error: "not found" });
   } catch (err) {
-    send(res, 500, { error: String(err?.message ?? err) });
+    // The client gets a fixed message. The error goes to stderr, which
+    // TestGoWitnessAgainstTypeScriptLog includes in its failure messages.
+    console.error("ts-log-server:", err);
+    send(res, 500, { error: "internal error" });
   }
 });
 server.listen(0, "127.0.0.1", () => process.stdout.write(`listening ${server.address().port}\n`));

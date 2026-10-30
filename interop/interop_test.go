@@ -14,12 +14,14 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -467,6 +469,25 @@ func TestTypeScriptWitnessAgainstThisLog(t *testing.T) {
 	}
 }
 
+// syncBuffer is a bytes.Buffer that a running command's output goroutine
+// can write while the test reads it.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 // TestGoWitnessAgainstTypeScriptLog runs this repository's witness
 // against a log served by the TypeScript TransparencyLog.
 func TestGoWitnessAgainstTypeScriptLog(t *testing.T) {
@@ -479,7 +500,7 @@ func TestGoWitnessAgainstTypeScriptLog(t *testing.T) {
 	// temporary files; they go in a directory the test removes.
 	cmd.Env = append(os.Environ(), "TMPDIR="+t.TempDir())
 	stdout, _ := cmd.StdoutPipe()
-	var stderr bytes.Buffer
+	var stderr syncBuffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -501,7 +522,7 @@ func TestGoWitnessAgainstTypeScriptLog(t *testing.T) {
 		}
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
-			t.Fatalf("POST %s: %d", path, resp.StatusCode)
+			t.Fatalf("POST %s: %d (%s)", path, resp.StatusCode, stderr.String())
 		}
 	}
 	cfg := witness.Config{BaseURL: base, WitnessID: "w-go", Key: ks.wGo, LogKey: ks.log.Public().(ed25519.PublicKey),
@@ -516,6 +537,16 @@ func TestGoWitnessAgainstTypeScriptLog(t *testing.T) {
 			t.Fatalf("verdict %s (%s), want %s", r.Verdict, r.Reason, want)
 		}
 		return r
+	}
+	// A request the harness cannot handle gets a fixed message, not the error.
+	resp, err := http.Post(base+"/test/append", "application/json", strings.NewReader("{not json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 500 || string(raw) != `{"error":"internal error"}` {
+		t.Fatalf("malformed body: %d %s (%s)", resp.StatusCode, raw, stderr.String())
 	}
 	expect(witness.Witnessed) // the empty tree
 	for size := 1; size <= 17; size++ {

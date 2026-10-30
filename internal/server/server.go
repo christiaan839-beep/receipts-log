@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/christiaan839-beep/receipts-log/internal/keys"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
@@ -189,9 +191,9 @@ func (s *Server) middleware(next http.Handler, isRead func(*http.Request) bool) 
 					fail(http.StatusInternalServerError, "internal error")
 				}
 			}
-			s.logger.Info("request", "requestId", id, "method", r.Method, "path", r.URL.Path,
+			s.logger.Info("request", "requestId", id, "method", logSafe(r.Method), "path", logSafe(r.URL.Path),
 				"status", sw.status, "bytes", sw.bytes, "durationMs", time.Since(start).Milliseconds(),
-				"remote", r.RemoteAddr)
+				"remote", logSafe(r.RemoteAddr))
 		}()
 		select {
 		case s.sem <- struct{}{}:
@@ -467,6 +469,36 @@ type cosignRequest struct {
 	PublicKeyURL string `json:"publicKeyUrl"`
 }
 
+// logSafe escapes a request-derived string before it is logged: a
+// backslash becomes \\, CR and LF become \r and \n, every other control
+// character (and U+2028, U+2029) becomes \uXXXX, and each byte that is not
+// valid UTF-8 becomes \xNN. The escaping is lossless, and the result holds
+// no line break, so the value cannot end its log line or forge another,
+// whatever the log handler.
+func logSafe(v string) string {
+	var b strings.Builder
+	for i := 0; i < len(v); {
+		r, size := utf8.DecodeRuneInString(v[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, v[i])
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\r' || r == '\n':
+			b.WriteRune(r) // escaped below
+		case unicode.IsControl(r) || r == ' ' || r == ' ':
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+		i += size
+	}
+	// CR and LF are replaced last, by strings.ReplaceAll, the form CodeQL's
+	// go/log-injection query recognises as sanitising.
+	out := strings.ReplaceAll(b.String(), "\r", `\r`)
+	return strings.ReplaceAll(out, "\n", `\n`)
+}
+
 func (s *Server) postCosignature(w http.ResponseWriter, r *http.Request) {
 	body, ok := readJSONBody(w, r, maxCosignatureBody)
 	if !ok {
@@ -483,7 +515,7 @@ func (s *Server) postCosignature(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if recorded {
-		s.logger.Info("cosignature recorded", "witnessId", req.WitnessID, "witnessCount", n)
+		s.logger.Info("cosignature recorded", "witnessId", logSafe(req.WitnessID), "witnessCount", n)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "recorded": recorded, "firstForThisSth": recorded && n == 1, "witnessCount": n})
 }
