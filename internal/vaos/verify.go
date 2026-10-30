@@ -1,6 +1,6 @@
 // Copied from github.com/christiaan839-beep/verifiable-receipts,
 // packages/verifiable-receipts-go/verify.go at commit
-// f41348eac297c81e1c2a0dca91b7bd49dd2a5d9a (Apache-2.0, Copyright 2026
+// 4d9943a99376527f742dcfdf93652ed040a51b43 (Apache-2.0, Copyright 2026
 // Christiaan de Wet / Sovereign Matrix). Changed: this notice added; the
 // code below is otherwise unchanged. See internal/vaos/README.md.
 
@@ -196,7 +196,7 @@ func LoadEd25519PublicKeyFromPEM(pemBytes []byte) (ed25519.PublicKey, error) {
 	if !ok {
 		return nil, errors.New("vaos: PEM is not an Ed25519 public key")
 	}
-	if problem := ed25519KeyProblem(ed); problem != "" {
+	if problem := Ed25519PublicKeyProblem(ed); problem != "" {
 		return nil, errors.New("vaos: " + problem)
 	}
 	return ed, nil
@@ -215,22 +215,26 @@ var smallOrderKeys = [...]string{
 	"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
 }
 
-// keyProblems caches ed25519KeyProblem's answers by key; a key's answer
-// never changes. R is never cached.
+// keyProblems caches Ed25519PublicKeyProblem's answers by key; a key's
+// answer never changes. R is never cached.
 var keyProblems = struct {
 	sync.Mutex
 	m map[string]string
 }{m: make(map[string]string)}
 
-// ed25519KeyProblem says why a 32-byte Ed25519 public key is refused
-// (VAOS 2.0 section 7.3), or returns "". In order: the small-order
-// blocklist (sign bit cleared); y of p or more; a y with no x on the
-// curve; a point of small order; a point outside the prime-order
-// subgroup (mixed order). A key that is not 32 bytes is left to the
-// signature check, which fails. Answers are cached per key.
-func ed25519KeyProblem(pub []byte) string {
+// Ed25519PublicKeyProblem says why a raw Ed25519 public key is refused
+// (VAOS 2.0 section 7.3), or returns "" when it is not. In order: "public
+// key is not 32 bytes"; "public key is a small-order point" (the
+// blocklist, sign bit cleared); "public key is not a canonical encoding"
+// (y of p or more); "public key is not a point on the curve"; "public
+// key is a small-order point"; "public key is not in the prime-order
+// subgroup" (mixed order). The same reasons, in the same order, as
+// TypeScript ed25519PublicKeyProblem and Python
+// ed25519_public_key_problem. Answers are cached per key, so a caller
+// that checks the same keys on every request pays for each key once.
+func Ed25519PublicKeyProblem(pub []byte) string {
 	if len(pub) != ed25519.PublicKeySize {
-		return ""
+		return "public key is not 32 bytes"
 	}
 	keyProblems.Lock()
 	problem, ok := keyProblems.m[string(pub)]
@@ -272,14 +276,21 @@ func rawKeyProblem(pub []byte) string {
 // and in the TypeScript and Python verifiers.
 const signatureDoesNotVerify = "signature does not verify under the supplied public key"
 
-// ed25519SignatureProblem says why a signature is rejected before
-// crypto/ed25519 sees it (VAOS 2.0 section 7.3), or returns "": it is 64
-// bytes; its R (the first 32) is a canonical encoding of a point on the
-// curve that is not of small order (the identity included) and is in
-// the prime-order subgroup ("signature R is ..."); its S (the last 32,
-// little-endian) is below L. A wrong length or an S of L or more has the
-// reason a failed check has.
-func ed25519SignatureProblem(sig []byte) string {
+// Ed25519SignatureProblem says why an Ed25519 signature is rejected
+// before the signature check (VAOS 2.0 section 7.3), or returns "" when
+// it is not: it is 64 bytes; its R (the first 32) is a canonical
+// encoding of a point on the curve that is not of small order (the
+// identity included) and is in the prime-order subgroup ("signature R is
+// not a canonical encoding", "... is not a point on the curve", "... is
+// a small-order point", "... is not in the prime-order subgroup"); its S
+// (the last 32, little-endian) is below L. A wrong length or an S of L or
+// more has the reason a failed check has, "signature does not verify
+// under the supplied public key". The same reasons, in the same order,
+// as TypeScript ed25519SignatureProblem and Python
+// ed25519_signature_problem. R is never cached: it depends on the
+// signature, not the key, so a caller checking one signature against
+// several keys calls this once.
+func Ed25519SignatureProblem(sig []byte) string {
 	if len(sig) != ed25519.SignatureSize {
 		return signatureDoesNotVerify
 	}
@@ -296,15 +307,13 @@ func ed25519SignatureProblem(sig []byte) string {
 // of VAOS 2.0 section 7.3: the key is checked first, then R and S, and
 // only then does crypto/ed25519 run the cofactorless check, over R and A
 // as given. Under these checks every correct Ed25519 verifier,
-// cofactored or cofactorless, gives the same verdict. The reasons are
-// those of VerifyV2Receipt, and "public key is not 32 bytes".
+// cofactored or cofactorless, gives the same verdict. The key check is
+// Ed25519PublicKeyProblem and the R and S check Ed25519SignatureProblem;
+// the reasons are theirs and that of a signature that fails.
 func VerifyEd25519(pub ed25519.PublicKey, message, sig []byte) VerifyResult {
-	if len(pub) != ed25519.PublicKeySize {
-		return VerifyResult{OK: false, Reason: "public key is not 32 bytes"}
-	}
-	problem := ed25519KeyProblem(pub)
+	problem := Ed25519PublicKeyProblem(pub)
 	if problem == "" {
-		problem = ed25519SignatureProblem(sig)
+		problem = Ed25519SignatureProblem(sig)
 	}
 	if problem != "" {
 		return VerifyResult{OK: false, Reason: problem}
@@ -364,8 +373,11 @@ func VerifyV2Receipt(r Receipt, pub ed25519.PublicKey) VerifyResult {
 	if err != nil || base64.StdEncoding.EncodeToString(sigBytes) != sigText {
 		return VerifyResult{OK: false, Reason: "signature base64 invalid: not canonical"}
 	}
-	if problem := ed25519KeyProblem(pub); problem != "" {
-		return VerifyResult{OK: false, Reason: problem}
+	// A key of the wrong length is left to the signature check, which fails.
+	if len(pub) == ed25519.PublicKeySize {
+		if problem := Ed25519PublicKeyProblem(pub); problem != "" {
+			return VerifyResult{OK: false, Reason: problem}
+		}
 	}
 
 	canonicalBytes := []byte(r.Canonical)
@@ -387,7 +399,7 @@ func VerifyV2Receipt(r Receipt, pub ed25519.PublicKey) VerifyResult {
 		return VerifyResult{OK: false, Reason: signatureDoesNotVerify}
 	}
 	// VAOS 2.0 section 7.3: R and S are checked before crypto/ed25519 sees them.
-	if problem := ed25519SignatureProblem(sigBytes); problem != "" {
+	if problem := Ed25519SignatureProblem(sigBytes); problem != "" {
 		return VerifyResult{OK: false, Reason: problem}
 	}
 	if !ed25519.Verify(pub, canonicalBytes, sigBytes) {

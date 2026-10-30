@@ -14,8 +14,9 @@ the first release; it includes everything listed under 0.1.0.
 - Every Ed25519 signature the log or the witness checks, of a receipt, a tree
   head or a cosignature, is checked under the strict profile of VAOS 2.0 §7.3
   (amended 30 October 2026), by the verifiable-receipts Go verifier now copied
-  into `internal/vaos` at verifiable-receipts f41348e (`VerifyEd25519`, with
-  `math/big` point arithmetic in `edwards25519.go`). Before `crypto/ed25519`
+  into `internal/vaos` at verifiable-receipts 4d9943a (`VerifyEd25519`, with
+  `math/big` point arithmetic in `edwards25519.go`, and its pre-checks
+  `Ed25519PublicKeyProblem` and `Ed25519SignatureProblem`). Before `crypto/ed25519`
   sees a signature, the key and the signature's R must be canonical encodings
   of points of order L and S must be below L. 0.1.0 admitted a receipt whose R
   is the identity (S = k·a under an ordinary key), which Node.js 24.22 and 26
@@ -33,6 +34,16 @@ the first release; it includes everything listed under 0.1.0.
 - `sth.Sign` and the witness sign through the new `sth.SignBytes`, which checks
   each signature under the strict profile before returning it, so no tree head
   or cosignature is published that a strict verifier rejects.
+- Admission checks a receipt's R and S once, not once per issuer key and again
+  for the Guardian attestation view: refusing a forged signature (about 150
+  bytes, no key needed) costs about one subgroup check, 0.89 ms with 8 issuer
+  keys instead of 11.3 ms (0.70 ms instead of 1.4 ms with one; Apple M4). Each key then
+  costs one `crypto/ed25519` check, and `VerifyGuardianAttestation` runs only
+  under a key the signature verifies under. The reason a client gets is the
+  same as before with one issuer key, for every input.
+- `API.md` "Limits" gives the verification cost of each request and
+  recommends a per-client rate limit in a reverse proxy in front of a public
+  log.
 
 ### Changed
 
@@ -41,6 +52,21 @@ the first release; it includes everything listed under 0.1.0.
 - A store written by an older build still opens and serves; `check
   -issuer-key` lists the receipts the strict profile refuses as nonconforming
   (exit 3), with these reasons (README, "After upgrading").
+- With several issuer keys, the 422 `error` of `POST /v1/entries` (and a
+  reason in `check -issuer-key`) is chosen as verify-receipts-action chooses
+  it: a reason about the receipt itself first, then one about R, then
+  `signature does not verify under any of the N issuer keys`. It was the first
+  key's reason. With one key it is unchanged.
+
+### Added
+
+- `check -witness-key NAME=FILE` (repeatable, as for `serve`) verifies every
+  stored cosignature under its witness's key, as the server checks one
+  submitted today, and lists those it refuses in `nonconformingCosignatures`
+  (with `witnessKeys`, `cosignatures` and `nonconformingCosignatureCount`);
+  exit 4 when only cosignatures fail. The server loads stored cosignatures
+  without verifying them, so a cosignature an older build recorded with an R
+  that is the identity is still served; `check` now reports it.
 
 ## [0.1.0] — 2026-10-30
 

@@ -40,6 +40,9 @@ const (
 	exitFail          = 1 // verification failed or fork detected
 	exitUsage         = 2 // usage, configuration or network error
 	exitNonconforming = 3 // check -issuer-key: the store is intact, but holds receipts admission now refuses
+	// check -witness-key: the store is intact and its receipts pass, but it
+	// holds cosignatures the log now refuses.
+	exitNonconformingCosig = 4
 )
 
 const usage = `receipts-log: a transparency log and witness for verifiable-receipts receipts.
@@ -52,7 +55,7 @@ Usage:
   receipts-log append   -url URL -file RECEIPT.json
   receipts-log sth      -url URL -log-public-key FILE
   receipts-log prove    -url URL -file RECEIPT.json -log-public-key FILE
-  receipts-log check    -data DIR -log-id ID -log-public-key FILE [-issuer-key FILE]
+  receipts-log check    -data DIR -log-id ID -log-public-key FILE [-issuer-key FILE] [-witness-key NAME=FILE]
   receipts-log version
 
 Run "receipts-log <command> -h" for a command's flags. The serve and
@@ -61,11 +64,14 @@ can also be set with environment variables; -h names each one.
 
 check -issuer-key (repeatable, as for serve) also verifies every stored
 receipt as the server admits receipts now, and lists those it refuses.
+check -witness-key (repeatable, as for serve) likewise verifies every
+stored cosignature under its witness's key.
 
 Exit codes: 0 success, 1 verification failed or fork detected (for check,
 a corrupt store), 2 usage, configuration or network error, 3 check found
 stored receipts that the current admission rules refuse (the store is
-otherwise intact).
+otherwise intact), 4 check found no such receipt but stored cosignatures
+that the log now refuses.
 `
 
 func main() {
@@ -199,17 +205,9 @@ func cmdServe(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	witnessKeys := map[string]ed25519.PublicKey{}
-	for _, w := range witnesses {
-		name, path, ok := strings.Cut(w, "=")
-		if !ok || name == "" || path == "" {
-			return fmt.Errorf("-witness-key %q: want NAME=FILE", w)
-		}
-		k, err := keys.LoadPublicKey(path)
-		if err != nil {
-			return fmt.Errorf("-witness-key %s: %w", name, err)
-		}
-		witnessKeys[name] = k
+	witnessKeys, err := loadWitnessKeys(witnesses)
+	if err != nil {
+		return err
 	}
 
 	l, err := translog.Open(translog.Config{
@@ -280,6 +278,23 @@ func loadIssuerKeys(paths []string) ([]ed25519.PublicKey, error) {
 			return nil, fmt.Errorf("-issuer-key: %w", err)
 		}
 		out = append(out, k)
+	}
+	return out, nil
+}
+
+// loadWitnessKeys loads the -witness-key NAME=FILE flags of serve and check.
+func loadWitnessKeys(flags []string) (map[string]ed25519.PublicKey, error) {
+	out := map[string]ed25519.PublicKey{}
+	for _, w := range flags {
+		name, path, ok := strings.Cut(w, "=")
+		if !ok || name == "" || path == "" {
+			return nil, fmt.Errorf("-witness-key %q: want NAME=FILE", w)
+		}
+		k, err := keys.LoadPublicKey(path)
+		if err != nil {
+			return nil, fmt.Errorf("-witness-key %s: %w", name, err)
+		}
+		out[name] = k
 	}
 	return out, nil
 }
@@ -590,6 +605,9 @@ func cmdCheck(args []string, stdout, stderr io.Writer) (int, error) {
 	var issuers listFlag
 	fs.Var(&issuers, "issuer-key", "SPKI PEM Ed25519 issuer public key, as for serve; repeat for several. "+
 		"Also verify every stored receipt under these keys and list those admission now refuses (exit 3)")
+	var witnesses listFlag
+	fs.Var(&witnesses, "witness-key", "NAME=FILE: a witness ID and its SPKI PEM public key, as for serve; repeat for several. "+
+		"Also verify every stored cosignature and list those the log now refuses (exit 4)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, err
 	}
@@ -604,19 +622,38 @@ func cmdCheck(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return exitUsage, err
 	}
-	rep, err := translog.Check(*data, *logID, lk, translog.CheckOptions{IssuerKeys: issuerKeys})
+	witnessKeys, err := loadWitnessKeys(witnesses)
+	if err != nil {
+		return exitUsage, err
+	}
+	rep, err := translog.Check(*data, *logID, lk, translog.CheckOptions{IssuerKeys: issuerKeys, WitnessKeys: witnessKeys})
 	out, _ := json.MarshalIndent(rep, "", "  ")
 	fmt.Fprintln(stdout, string(out))
 	if err != nil {
 		return exitFail, err
 	}
+	var problems []string
+	code := exitOK
+	if n := rep.NonconformingCosignatureCount; n != nil && *n > 0 {
+		problems = append(problems, fmt.Sprintf("%d stored cosignature(s) the log now refuses%s",
+			*n, listed(len(rep.NonconformingCosignatures), *n)))
+		code = exitNonconformingCosig
+	}
 	if n := rep.NonconformingCount; n != nil && *n > 0 {
-		shown := ""
-		if uint64(len(rep.Nonconforming)) < *n {
-			shown = fmt.Sprintf(" (the first %d are listed)", len(rep.Nonconforming))
-		}
-		return exitNonconforming, fmt.Errorf("%d stored receipt(s) fail the current admission rules%s",
-			*n, shown)
+		problems = append([]string{fmt.Sprintf("%d stored receipt(s) fail the current admission rules%s",
+			*n, listed(len(rep.Nonconforming), *n))}, problems...)
+		code = exitNonconforming
+	}
+	if code != exitOK {
+		return code, errors.New(strings.Join(problems, "; "))
 	}
 	return exitOK, nil
+}
+
+// listed says how many of n a check report lists, when not all.
+func listed(shown int, n uint64) string {
+	if uint64(shown) < n {
+		return fmt.Sprintf(" (the first %d are listed)", shown)
+	}
+	return ""
 }

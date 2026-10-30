@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -451,19 +452,9 @@ func (s *Store) loadCosignatures(visit func([]byte) error) error {
 	if err != nil {
 		return err
 	}
-	good := 0
-	for good < len(data) {
-		nl := bytes.IndexByte(data[good:], '\n')
-		if nl < 0 {
-			break // torn last line
-		}
-		line := data[good : good+nl]
-		if visit != nil {
-			if err := visit(line); err != nil {
-				return fmt.Errorf("%w: %s at offset %d: %v", ErrCorrupt, CosignaturesFile, good, err)
-			}
-		}
-		good += nl + 1
+	good, err := scanCosignatures(data, visit)
+	if err != nil {
+		return err
 	}
 	if good < len(data) {
 		s.log.Warn("truncating an interrupted cosignature write", "offset", good)
@@ -473,6 +464,41 @@ func (s *Store) loadCosignatures(visit func([]byte) error) error {
 		return s.cosig.Sync()
 	}
 	return nil
+}
+
+// scanCosignatures calls visit for each complete line of data and
+// returns the length of those lines; what follows is a torn last line.
+func scanCosignatures(data []byte, visit func([]byte) error) (int, error) {
+	good := 0
+	for good < len(data) {
+		nl := bytes.IndexByte(data[good:], '\n')
+		if nl < 0 {
+			break // torn last line
+		}
+		line := data[good : good+nl]
+		if visit != nil {
+			if err := visit(line); err != nil {
+				return good, fmt.Errorf("%w: %s at offset %d: %v", ErrCorrupt, CosignaturesFile, good, err)
+			}
+		}
+		good += nl + 1
+	}
+	return good, nil
+}
+
+// ReadCosignatures calls visit for each stored cosignature line in dir,
+// as Open does, without changing the file: a torn last line, which Open
+// truncates, is skipped. A missing file holds none.
+func ReadCosignatures(dir string, visit func(line []byte) error) error {
+	data, err := os.ReadFile(filepath.Join(dir, CosignaturesFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = scanCosignatures(data, visit)
+	return err
 }
 
 // Close releases the store.

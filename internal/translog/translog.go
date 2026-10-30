@@ -12,6 +12,7 @@ package translog
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -392,19 +393,107 @@ func verifyReceipt(body []byte, issuers []ed25519.PublicKey) (vaos.Receipt, stri
 	return r, issuer, err
 }
 
+// rProblemPrefix and keyProblemPrefix begin the strict-profile reasons
+// of VAOS 2.0 section 7.3 about R and about the key, as vaos gives them.
+const (
+	rProblemPrefix   = "signature R is "
+	keyProblemPrefix = "public key is "
+)
+
+// signatureDoesNotVerify is vaos's reason for a signature that fails
+// under the key (an S of L or more, or a wrong length, included).
+const signatureDoesNotVerify = "signature does not verify under the supplied public key"
+
+// isSignatureFailure reports whether a reason is about the signature
+// under one key, as verify-receipts-action's isSignatureFailure: it does
+// not verify, the key is refused, or R is. Every other reason is about
+// the receipt: its form or contentHash, the same under every key, or an
+// envelope field that fails after the signature has verified.
+func isSignatureFailure(reason string) bool {
+	return reason == signatureDoesNotVerify || strings.HasPrefix(reason, rProblemPrefix) ||
+		strings.HasPrefix(reason, keyProblemPrefix)
+}
+
+// verifyIssued returns the ID of the first issuer key under which r
+// verifies as a VAOS 2.0 receipt or as a Guardian attestation. Its
+// answer under each key is what VerifyV2Receipt and then
+// VerifyGuardianAttestation give, but the work that does not depend on
+// the key is done once per receipt, not once per key, so that a forged
+// signature costs about one subgroup check however many keys there are:
+//
+//   - VerifyV2Receipt under a key of the wrong length (nil) makes every
+//     check that comes before the signature (the receipt's form, its
+//     base64 and its contentHash, in VerifyV2Receipt's order) and stops
+//     at the signature with signatureDoesNotVerify, without point
+//     arithmetic. Any other reason is the reason under every valid key.
+//   - vaos.Ed25519SignatureProblem then checks R and S once.
+//   - Then crypto/ed25519 alone checks the signature under each issuer
+//     in turn, after those checks, as vaos.VerifyEd25519 does; the key
+//     is checked by vaos.Ed25519PublicKeyProblem, whose answers are
+//     cached (Open and Check refuse a bad issuer key, so it is "" there).
+//   - Only under a key the signature verifies under does VerifyV2Receipt
+//     run in full, and VerifyGuardianAttestation only when that fails at
+//     the envelope: the attestation's signed view has the same
+//     canonical, signature and contentHash, so it fails every earlier
+//     step the same way.
+//
+// When no key verifies it, the reason follows verify-receipts-action's
+// rule (verifyUnderKeys): a reason about the receipt wins, then one
+// about R, then the one key's own reason or, with several, that the
+// signature verifies under none of them.
 func verifyIssued(r vaos.Receipt, issuers []ed25519.PublicKey) (string, error) {
-	reason := ""
-	for _, k := range issuers {
-		res := vaos.VerifyV2Receipt(r, k)
-		if res.OK {
-			return keys.ID(k), nil
-		}
-		if reason == "" {
+	keyless := vaos.VerifyV2Receipt(r, nil).Reason
+	var sig []byte
+	sigProblem := ""
+	if keyless == signatureDoesNotVerify {
+		// VerifyV2Receipt has checked that the signature is "v2=" and
+		// canonical base64.
+		sig, _ = base64.StdEncoding.DecodeString(strings.TrimPrefix(r.Signature, "v2="))
+		sigProblem = vaos.Ed25519SignatureProblem(sig)
+	}
+	var first, receiptProblem, rProblem string
+	for i, k := range issuers {
+		var reason string
+		switch {
+		case vaos.Ed25519PublicKeyProblem(k) != "":
+			// A refused key or one of the wrong length: VerifyV2Receipt
+			// stops at it, or earlier, before any point arithmetic.
+			reason = vaos.VerifyV2Receipt(r, k).Reason
+		case keyless != signatureDoesNotVerify:
+			reason = keyless
+		case sigProblem != "":
+			reason = sigProblem
+		case !ed25519.Verify(k, []byte(r.Canonical), sig):
+			reason = signatureDoesNotVerify
+		default:
+			res := vaos.VerifyV2Receipt(r, k)
+			if res.OK || vaos.VerifyGuardianAttestation(r, k).OK {
+				return keys.ID(k), nil
+			}
 			reason = res.Reason
 		}
-		if vaos.VerifyGuardianAttestation(r, k).OK {
-			return keys.ID(k), nil
+		if i == 0 {
+			first = reason
 		}
+		switch {
+		case !isSignatureFailure(reason):
+			if receiptProblem == "" {
+				receiptProblem = reason
+			}
+		case strings.HasPrefix(reason, rProblemPrefix):
+			if rProblem == "" {
+				rProblem = reason
+			}
+		}
+	}
+	reason := first
+	switch {
+	case receiptProblem != "":
+		reason = receiptProblem
+	case rProblem != "":
+		reason = rProblem
+	case len(issuers) > 1:
+		reason = fmt.Sprintf("signature does not verify under any of the %d issuer keys", len(issuers))
 	}
 	return "", fmt.Errorf("%w: %s", ErrUnverified, reason)
 }
@@ -602,11 +691,8 @@ func (l *Log) AddCosignature(witnessID, canonical, signature, publicKeyURL strin
 	if err != nil {
 		return 0, false, fmt.Errorf("%w: sthCanonical: %v", ErrInvalidCosig, err)
 	}
-	// Strict Ed25519 (VAOS 2.0 section 7.3), as sth.VerifyBytes checks
-	// every signature; the error carries the verifier's reason.
-	if err := sth.VerifyBytes([]byte(canonical), signature, pub); err != nil {
-		reason := strings.TrimPrefix(err.Error(), sth.ErrSignature.Error()+": ")
-		return 0, false, fmt.Errorf("%w: %s", ErrWitnessSignature, reason)
+	if err := verifyCosignature(canonical, signature, pub); err != nil {
+		return 0, false, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -638,6 +724,18 @@ func (l *Log) AddCosignature(witnessID, canonical, signature, publicKeyURL strin
 	}
 	l.addCosigLocked(c)
 	return l.cosigCounts[canonical], true, nil
+}
+
+// verifyCosignature checks a witness's signature over a tree head
+// with sth.VerifyBytes, under the strict profile of VAOS 2.0 section
+// 7.3. The error is ErrWitnessSignature with the verifier's reason.
+// AddCosignature and Check both call it.
+func verifyCosignature(canonical, signature string, pub ed25519.PublicKey) error {
+	if err := sth.VerifyBytes([]byte(canonical), signature, pub); err != nil {
+		reason := strings.TrimPrefix(err.Error(), sth.ErrSignature.Error()+": ")
+		return fmt.Errorf("%w: %s", ErrWitnessSignature, reason)
+	}
+	return nil
 }
 
 // Cosignatures returns the stored cosignatures for a tree size, or all

@@ -29,7 +29,7 @@ type env struct {
 	witness ed25519.PrivateKey
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t testing.TB) *env {
 	return &env{dir: t.TempDir(), logKey: testutil.Key(t), issuer: testutil.Key(t), witness: testutil.Key(t)}
 }
 
@@ -180,7 +180,7 @@ type fixture struct {
 }
 
 // fixtureKey parses a fixture's publicKeyPem as it is, weak or not.
-func fixtureKey(t *testing.T, text string) ed25519.PublicKey {
+func fixtureKey(t testing.TB, text string) ed25519.PublicKey {
 	t.Helper()
 	block, _ := pem.Decode([]byte(text))
 	if block == nil {

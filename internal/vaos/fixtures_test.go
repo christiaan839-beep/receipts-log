@@ -10,12 +10,18 @@ import (
 )
 
 // What the tests copied from verifiable-receipts (contenthash_test.go,
-// nesting_test.go and key_test.go) expect from the rest of that package's
+// nesting_test.go, key_test.go and strict_ed25519_test.go) expect from the rest of that package's
 // tests. There they come from its conformance_test.go and verify_test.go;
 // here the fixture paths name this repository's copies.
 
 const fixturesDir = "../../testdata/conformance/fixtures"
 const publicKeyPath = "../../testdata/conformance/public-key.pem"
+
+// v2Expected is a fixture's expected verdict.
+type v2Expected struct {
+	OK             bool   `json:"ok"`
+	ReasonContains string `json:"reasonContains,omitempty"`
+}
 
 type v2Fixture struct {
 	Receipt Receipt `json:"receipt"`

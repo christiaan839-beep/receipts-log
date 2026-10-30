@@ -58,6 +58,20 @@ the verifiable-receipts witness CLI checks tree heads.
 | Request headers | 16 KiB |
 | Concurrent requests | `-max-in-flight`, default 256 (503 with `Retry-After: 1` above it) |
 | Timeouts | header 5 s, read 20 s, write 40 s, idle 90 s |
+| Verification per `POST /v1/entries` | at most one check of R and S (about 0.7 ms on an Apple M4), then one `crypto/ed25519` check per issuer key (about 0.03 ms each); only under a key the signature verifies under is the receipt checked in full, with one or two more checks of R |
+| Verification per `POST /v1/cosignatures` | one check of the witness signature under the strict profile (about 0.7 ms) |
+
+The log authenticates no client: anyone who can reach it can submit a receipt
+or a cosignature, and the log checks each signature before it refuses it. The
+strict profile's check of R (VAOS 2.0 §7.3) is point arithmetic in `math/big`,
+so a refused request costs about 0.7 ms of CPU, however many issuer keys the
+log has, against about 150 bytes from the client. `-max-in-flight` bounds how
+many run at once, not how many arrive. Before a public deployment, put a
+reverse proxy in front of the log that limits the request rate per client
+address on `POST /v1/entries` and `POST /v1/cosignatures` (for example nginx
+`limit_req`, Caddy's `rate_limit` or an HAProxy stick table), and let it
+terminate TLS if the log does not. The read routes are cheap and need no
+rate limit beyond the usual.
 
 ## Routes
 
@@ -117,7 +131,12 @@ verify every receipt; under a mixed-order key verifiers disagree.
 ```
 
 A 422 `error` is `receipt signature does not verify under any configured
-issuer key: ` followed by the first key's reason, which is the
+issuer key: ` followed by one reason, chosen as verify-receipts-action
+chooses it: a reason about the receipt itself (its form, its `contentHash`, or
+an envelope field that disagrees with a canonical whose signature verifies
+under one of the keys) comes first, then a reason about R, which no key gets
+past; then, with one issuer key, that key's reason, and with several,
+`signature does not verify under any of the N issuer keys`. Each is the
 verifiable-receipts verifiers' reason, among them:
 
 | Reason | The receipt |

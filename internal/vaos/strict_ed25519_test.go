@@ -1,6 +1,6 @@
 // Copied from github.com/christiaan839-beep/verifiable-receipts,
 // packages/verifiable-receipts-go/strict_ed25519_test.go at commit
-// f41348eac297c81e1c2a0dca91b7bd49dd2a5d9a (Apache-2.0, Copyright 2026
+// 4d9943a99376527f742dcfdf93652ed040a51b43 (Apache-2.0, Copyright 2026
 // Christiaan de Wet / Sovereign Matrix). Changed: this notice added; the
 // code below is otherwise unchanged. See internal/vaos/README.md.
 
@@ -10,8 +10,13 @@ import (
 	"crypto/ed25519"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -96,7 +101,7 @@ func TestStrict_RejectsSmallAndMixedOrderR(t *testing.T) {
 		"mixed":    {edAdd(edScalarMult(rScalar, edBase), mustPoint(t, t8Hex)), rScalar, "signature R is not in the prime-order subgroup"},
 	} {
 		sig := sigWithR(c.r, strictMsg, pub, c.secret)
-		if got := ed25519SignatureProblem(sig); got != c.reason {
+		if got := Ed25519SignatureProblem(sig); got != c.reason {
 			t.Fatalf("%s: problem %q", name, got)
 		}
 		if got := reasons(pub, strictMsg, sig); got != both(c.reason) {
@@ -125,7 +130,7 @@ func TestStrict_REncodingProblems(t *testing.T) {
 		t.Fatalf("non-canonical: %q", got)
 	}
 	signBit := append(fromY(big.NewInt(1), 1), make([]byte, 32)...)
-	if got := ed25519SignatureProblem(signBit); got != "signature R is not a canonical encoding" {
+	if got := Ed25519SignatureProblem(signBit); got != "signature R is not a canonical encoding" {
 		t.Fatalf("sign bit: %q", got)
 	}
 	offCurve := append(fromY(big.NewInt(2), 0), le32(rScalar)...)
@@ -146,18 +151,18 @@ func TestStrict_RejectsSOfLOrMore(t *testing.T) {
 			le[i] = be[31-i]
 		}
 		tampered := append(append([]byte(nil), sig[:32]...), le...)
-		if got := ed25519SignatureProblem(tampered); got != genericReason {
+		if got := Ed25519SignatureProblem(tampered); got != genericReason {
 			t.Fatalf("S = %v: %q", bad, got)
 		}
 		if got := reasons(pub, strictMsg, tampered); got != both(genericReason) {
 			t.Fatalf("S = %v: %q", bad, got)
 		}
 	}
-	if got := ed25519SignatureProblem(sig); got != "" {
+	if got := Ed25519SignatureProblem(sig); got != "" {
 		t.Fatalf("honest: %q", got)
 	}
 	for _, n := range []int{0, 63, 65} {
-		if got := ed25519SignatureProblem(make([]byte, n)); got != genericReason {
+		if got := Ed25519SignatureProblem(make([]byte, n)); got != genericReason {
 			t.Fatalf("length %d: %q", n, got)
 		}
 		if got := VerifyEd25519(pub, strictMsg, make([]byte, n)).Reason; got != genericReason {
@@ -186,7 +191,7 @@ func TestStrict_MixedOrderRWithTheCofactorlessEquationHolding(t *testing.T) {
 			if got := reasons(pub, msg, sig); got != both("public key is not in the prime-order subgroup") {
 				t.Fatalf("%q", got)
 			}
-			if got := ed25519SignatureProblem(sig); got != "signature R is not in the prime-order subgroup" {
+			if got := Ed25519SignatureProblem(sig); got != "signature R is not in the prime-order subgroup" {
 				t.Fatalf("R alone: %q", got)
 			}
 			return
@@ -204,7 +209,7 @@ func TestStrict_RefusesMixedOrderAndOffCurveKeys(t *testing.T) {
 		"mixed T2":  {mixedPub(t, "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"), "public key is not in the prime-order subgroup"},
 		"off curve": {fromY(big.NewInt(2), 0), "public key is not a point on the curve"},
 	} {
-		if got := ed25519KeyProblem(c.raw); got != c.reason {
+		if got := Ed25519PublicKeyProblem(c.raw); got != c.reason {
 			t.Fatalf("%s: %q", name, got)
 		}
 		if _, err := LoadEd25519PublicKeyFromPEM(pemOf(t, c.raw)); err == nil || err.Error() != "vaos: "+c.reason {
@@ -229,7 +234,7 @@ func TestStrict_KeepsTheExistingKeyReasons(t *testing.T) {
 		{mustHex(t, t8Hex), "public key is a small-order point"},
 		{strictPub(), ""},
 	} {
-		if got := ed25519KeyProblem(c.raw); got != c.reason {
+		if got := Ed25519PublicKeyProblem(c.raw); got != c.reason {
 			t.Fatalf("%x: %q", c.raw, got)
 		}
 	}
@@ -256,5 +261,110 @@ func TestStrict_NilAndEmptyInputs(t *testing.T) {
 		if got := VerifyEd25519(c.pub, c.msg, c.sig); got.OK || got.Reason != c.reason {
 			t.Fatalf("%s: %+v", name, got)
 		}
+	}
+}
+
+// fixtureKeyAndSignature is an Ed25519 fixture's raw public key and
+// signature: from its "ed25519" vector, or from its publicKeyPem (the
+// last 32 bytes of the SPKI) and its receipt's v2 signature.
+func fixtureKeyAndSignature(t *testing.T, path string) (pub, sig []byte, expected v2Expected) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Ed25519 *struct {
+			PublicKey string `json:"publicKey"`
+			Signature string `json:"signature"`
+		} `json:"ed25519"`
+		PublicKeyPem string `json:"publicKeyPem"`
+		Receipt      struct {
+			Signature string `json:"signature"`
+		} `json:"receipt"`
+		Expected v2Expected `json:"expected"`
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Ed25519 != nil {
+		return mustHex(t, f.Ed25519.PublicKey), mustHex(t, f.Ed25519.Signature), f.Expected
+	}
+	block, _ := pem.Decode([]byte(f.PublicKeyPem))
+	if block == nil || len(block.Bytes) < 32 {
+		t.Fatalf("%s: no public key", path)
+	}
+	sig, err = base64.StdEncoding.DecodeString(strings.TrimPrefix(f.Receipt.Signature, "v2="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return block.Bytes[len(block.Bytes)-32:], sig, f.Expected
+}
+
+// The shared corpus through the two exported pre-checks: a fixture that
+// fails on its key expects the key's reason; any other expects no key
+// problem and, when it fails, the signature's reason. The TypeScript and
+// Python tests check the same, and the round trip
+// (conformance/roundtrip/) checks that the three languages give the same
+// pair of answers on every fixture.
+func TestStrict_ExportedPreChecksOnTheFixtures(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join(fixturesDir, "ed25519-*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 20 {
+		t.Fatalf("want 20 Ed25519 fixtures, have %d", len(paths))
+	}
+	for _, path := range paths {
+		t.Run(strings.TrimSuffix(filepath.Base(path), ".json"), func(t *testing.T) {
+			pub, sig, expected := fixtureKeyAndSignature(t, path)
+			want := expected.ReasonContains
+			if expected.OK != (want == "") {
+				t.Fatalf("fixture: ok %v with reason %q", expected.OK, want)
+			}
+			key := Ed25519PublicKeyProblem(pub)
+			if strings.HasPrefix(want, "public key ") {
+				if key != want {
+					t.Fatalf("key: %q, want %q", key, want)
+				}
+			} else {
+				if key != "" {
+					t.Fatalf("key: %q, want none", key)
+				}
+				if got := Ed25519SignatureProblem(sig); got != want {
+					t.Fatalf("signature: %q, want %q", got, want)
+				}
+			}
+			// The same answers as VerifyEd25519, which calls them.
+			first := key
+			if first == "" {
+				first = Ed25519SignatureProblem(sig)
+			}
+			if first != "" {
+				if got := VerifyEd25519(pub, nil, sig).Reason; got != first {
+					t.Fatalf("VerifyEd25519: %q, want %q", got, first)
+				}
+			}
+		})
+	}
+}
+
+// A key of the wrong length has its own reason, as in TypeScript and
+// Python; nil and empty slices fail without a panic.
+func TestStrict_ExportedPreChecksOnWrongLengths(t *testing.T) {
+	pub := strictPub()
+	sig := sigWithR(edScalarMult(rScalar, edBase), strictMsg, pub, rScalar)
+	for _, k := range [][]byte{nil, ed25519.PublicKey(nil), {}, pub[:31], append(append([]byte(nil), pub...), 0)} {
+		if got := Ed25519PublicKeyProblem(k); got != "public key is not 32 bytes" {
+			t.Fatalf("key of %d bytes: %q", len(k), got)
+		}
+	}
+	for _, s := range [][]byte{nil, {}, sig[:63], append(append([]byte(nil), sig...), 0)} {
+		if got := Ed25519SignatureProblem(s); got != genericReason {
+			t.Fatalf("signature of %d bytes: %q", len(s), got)
+		}
+	}
+	if Ed25519PublicKeyProblem(pub) != "" || Ed25519SignatureProblem(sig) != "" {
+		t.Fatal("an honest key and signature are refused")
 	}
 }
