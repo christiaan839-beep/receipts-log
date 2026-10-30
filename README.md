@@ -135,10 +135,16 @@ fields appears. With `-witness-key NAME=FILE` (repeatable, the same values as
 witness, as the server checks one submitted today, and the report has
 `witnessKeys`, `cosignatures`, `nonconformingCosignatureCount` and, when that
 is not 0, `nonconformingCosignatures`: the line in `cosignatures.jsonl` (from
-0), witness ID, tree size and refusal reason of each, `witness signature does
-not verify: <reason>` or `witness is not configured on this log`. The server
-loads stored cosignatures without verifying them, so only `check` reports
-these. Exit codes: 0 intact (and, with `-issuer-key`, every receipt passes,
+0), witness ID, the record's tree size and the refusal reason of each. The
+reasons are those of `POST /v1/cosignatures`, in its order (`witness is not
+configured on this log`, `tree head was not produced by this log`, `witness
+signature does not verify: <reason>`, …), and, for a record whose fields
+disagree with the head its `sthCanonical` signs, `cosignature record
+disagrees with its signed tree head: treeSize, rootHash`. When the server
+opens the directory it skips (and does not serve) a record whose head is not
+this log's or whose fields disagree, with a warning, and serves the others
+without re-verifying their signatures, so only `check` reports a bad
+signature. Exit codes: 0 intact (and, with `-issuer-key`, every receipt passes,
 and with `-witness-key`, every cosignature), 1 the store is corrupt or the
 checkpoint does not verify (reported first, whatever the receipts), 2 usage or
 configuration error, 3 the store is intact but holds receipts that admission

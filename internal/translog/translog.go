@@ -42,6 +42,11 @@ var (
 	ErrWitnessSignature = errors.New("witness signature does not verify")
 	ErrForeignSTH       = errors.New("tree head was not produced by this log")
 	ErrInvalidCosig     = errors.New("invalid cosignature request")
+	// ErrCosigRecord is a stored cosignature record whose treeSize,
+	// rootHash or timestamp differ from the tree head its sthCanonical
+	// signs. Only Open and Check meet it; AddCosignature writes the
+	// fields from the head.
+	ErrCosigRecord = errors.New("cosignature record disagrees with its signed tree head")
 )
 
 // Config configures Open.
@@ -111,6 +116,7 @@ type Log struct {
 	head        sth.STH
 	failed      bool
 	cosigs      []Cosignature
+	cosigSizes  []uint64 // cosigSizes[i] is the tree size cosigs[i]'s sthCanonical signs
 	cosigByKey  map[string]int
 	cosigCounts map[string]int
 }
@@ -169,12 +175,28 @@ func Open(cfg Config) (*Log, error) {
 		}
 		return nil
 	}
-	visitCosig := func(line []byte) error {
+	// A stored cosignature is served only as evidence of this log: one
+	// whose sthCanonical is not a head of this log, or whose record fields
+	// disagree with it, is skipped, with a warning, so that a store an
+	// older build wrote (or one edited by hand) still opens. Its signature
+	// is not verified here; check -witness-key does that.
+	var skipped, line uint64
+	firstSkipped := ""
+	visitCosig := func(raw []byte) error {
+		defer func() { line++ }()
 		var c Cosignature
-		if err := json.Unmarshal(line, &c); err != nil {
+		if err := json.Unmarshal(raw, &c); err != nil {
 			return err
 		}
-		l.addCosigLocked(c)
+		head, err := storedCosignatureHead(c, l.id, l.tree.Size(), l.tree.RootAt)
+		if err != nil {
+			if skipped == 0 {
+				firstSkipped = fmt.Sprintf("line %d: %v", line, err)
+			}
+			skipped++
+			return nil
+		}
+		l.addCosigLocked(c, head.TreeSize)
 		return nil
 	}
 	st, err := store.Open(store.Options{Dir: cfg.Dir, MaxPayload: maxEntry, Logger: logger}, visitEntry, visitCosig)
@@ -182,6 +204,10 @@ func Open(cfg Config) (*Log, error) {
 		return nil, err
 	}
 	l.st = st
+	if skipped > 0 {
+		logger.Warn("skipping stored cosignatures that are not evidence of this log; run check -witness-key",
+			"skipped", skipped, "first", firstSkipped)
+	}
 	if err := l.loadCheckpoint(cfg.Dir); err != nil {
 		st.Close()
 		return nil, err
@@ -433,9 +459,11 @@ func isSignatureFailure(reason string) bool {
 //     cached (Open and Check refuse a bad issuer key, so it is "" there).
 //   - Only under a key the signature verifies under does VerifyV2Receipt
 //     run in full, and VerifyGuardianAttestation only when that fails at
-//     the envelope: the attestation's signed view has the same
-//     canonical, signature and contentHash, so it fails every earlier
-//     step the same way.
+//     the envelope and the envelope has "rules" or "totalMs": the
+//     attestation's signed view has the same canonical, signature and
+//     contentHash, so it fails every earlier step the same way, and it
+//     differs from the receipt only by dropping "totalMs" and projecting
+//     "rules", so without either it is the receipt and fails the same.
 //
 // When no key verifies it, the reason follows verify-receipts-action's
 // rule (verifyUnderKeys): a reason about the receipt wins, then one
@@ -467,7 +495,7 @@ func verifyIssued(r vaos.Receipt, issuers []ed25519.PublicKey) (string, error) {
 			reason = signatureDoesNotVerify
 		default:
 			res := vaos.VerifyV2Receipt(r, k)
-			if res.OK || vaos.VerifyGuardianAttestation(r, k).OK {
+			if res.OK || (hasGuardianFields(r) && vaos.VerifyGuardianAttestation(r, k).OK) {
 				return keys.ID(k), nil
 			}
 			reason = res.Reason
@@ -496,6 +524,15 @@ func verifyIssued(r vaos.Receipt, issuers []ed25519.PublicKey) (string, error) {
 		reason = fmt.Sprintf("signature does not verify under any of the %d issuer keys", len(issuers))
 	}
 	return "", fmt.Errorf("%w: %s", ErrUnverified, reason)
+}
+
+// hasGuardianFields reports whether r's envelope has a field the
+// Guardian attestation's signed view changes ("rules", projected, and
+// "totalMs", dropped); without one the view is r itself.
+func hasGuardianFields(r vaos.Receipt) bool {
+	_, rules := r.Envelope["rules"]
+	_, total := r.Envelope["totalMs"]
+	return rules || total
 }
 
 // Append verifies a receipt and, when it is new, appends it. A receipt
@@ -663,45 +700,122 @@ func (l *Log) ProveConsistency(first, second uint64) (ConsistencyProof, error) {
 
 func cosigKey(witnessID, canonical string) string { return witnessID + "\x00" + canonical }
 
-func (l *Log) addCosigLocked(c Cosignature) {
+// addCosigLocked records c, whose sthCanonical signs a head of size.
+func (l *Log) addCosigLocked(c Cosignature, size uint64) {
 	k := cosigKey(c.WitnessID, c.STHCanonical)
 	if _, ok := l.cosigByKey[k]; ok {
 		return
 	}
 	l.cosigByKey[k] = len(l.cosigs)
 	l.cosigs = append(l.cosigs, c)
+	l.cosigSizes = append(l.cosigSizes, size)
 	l.cosigCounts[c.STHCanonical]++
+}
+
+// cosigRules is what vetCosignature checks a cosignature against.
+type cosigRules struct {
+	witnesses map[string]ed25519.PublicKey
+	// ownHead reports whether head is one this log produced: its log ID,
+	// a size it has reached, and the root it had at that size.
+	ownHead func(head sth.STH) bool
+}
+
+// ownHeadOf returns cosigRules.ownHead for the log logID with a tree of
+// size entries whose roots rootAt gives.
+func ownHeadOf(logID string, size uint64, rootAt func(uint64) (merkle.Hash, error)) func(sth.STH) bool {
+	return func(head sth.STH) bool {
+		if head.LogID != logID || head.TreeSize > size {
+			return false
+		}
+		root, err := rootAt(head.TreeSize)
+		return err == nil && root.String() == head.RootHash
+	}
+}
+
+// vetCosignature applies the rules a cosignature must meet, in this
+// order, and returns the tree head it signs:
+//
+//  1. witnessId and publicKeyUrl are valid labels (ErrInvalidCosig);
+//  2. the witness is configured (ErrUnknownWitness);
+//  3. sthCanonical is a tree head in canonical form (ErrInvalidCosig);
+//  4. the head is one this log produced (ErrForeignSTH): checked before
+//     the signature because it is cheap, so a head that is not this
+//     log's costs no subgroup check;
+//  5. the signature verifies under the witness's key, under the strict
+//     profile of VAOS 2.0 section 7.3 (ErrWitnessSignature).
+//
+// AddCosignature and Check both call it.
+func vetCosignature(rules cosigRules, witnessID, canonical, signature, publicKeyURL string) (sth.STH, error) {
+	if !sth.ValidLabel(witnessID, 256) {
+		return sth.STH{}, fmt.Errorf("%w: witnessId", ErrInvalidCosig)
+	}
+	if publicKeyURL != "" && !sth.ValidLabel(publicKeyURL, 2048) {
+		return sth.STH{}, fmt.Errorf("%w: publicKeyUrl", ErrInvalidCosig)
+	}
+	pub, ok := rules.witnesses[witnessID]
+	if !ok {
+		return sth.STH{}, ErrUnknownWitness
+	}
+	head, err := sth.ParseCanonical([]byte(canonical))
+	if err != nil {
+		return sth.STH{}, fmt.Errorf("%w: sthCanonical: %v", ErrInvalidCosig, err)
+	}
+	if !rules.ownHead(head) {
+		return sth.STH{}, ErrForeignSTH
+	}
+	if err := verifyCosignature(canonical, signature, pub); err != nil {
+		return sth.STH{}, err
+	}
+	return head, nil
+}
+
+// storedCosignatureHead returns the head a stored record's sthCanonical
+// signs, when it is in canonical form, is a head of the log logID (with
+// size entries, whose roots rootAt gives) and the record's treeSize,
+// rootHash and timestamp are the head's. It does not check the witness
+// or the signature: Open calls it on every stored record, and Check
+// after vetCosignature.
+func storedCosignatureHead(c Cosignature, logID string, size uint64, rootAt func(uint64) (merkle.Hash, error)) (sth.STH, error) {
+	head, err := sth.ParseCanonical([]byte(c.STHCanonical))
+	if err != nil {
+		return sth.STH{}, fmt.Errorf("%w: sthCanonical: %v", ErrInvalidCosig, err)
+	}
+	if !ownHeadOf(logID, size, rootAt)(head) {
+		return sth.STH{}, ErrForeignSTH
+	}
+	var differ []string
+	if c.TreeSize != head.TreeSize {
+		differ = append(differ, "treeSize")
+	}
+	if c.RootHash != head.RootHash {
+		differ = append(differ, "rootHash")
+	}
+	if c.Timestamp != head.Timestamp {
+		differ = append(differ, "timestamp")
+	}
+	if len(differ) > 0 {
+		return sth.STH{}, fmt.Errorf("%w: %s", ErrCosigRecord, strings.Join(differ, ", "))
+	}
+	return head, nil
 }
 
 // AddCosignature records a witness's signature over one of this log's
 // tree heads. It returns the number of distinct witnesses that have
 // cosigned that tree head and whether this call added a record.
 func (l *Log) AddCosignature(witnessID, canonical, signature, publicKeyURL string) (int, bool, error) {
-	if !sth.ValidLabel(witnessID, 256) {
-		return 0, false, fmt.Errorf("%w: witnessId", ErrInvalidCosig)
-	}
-	if publicKeyURL != "" && !sth.ValidLabel(publicKeyURL, 2048) {
-		return 0, false, fmt.Errorf("%w: publicKeyUrl", ErrInvalidCosig)
-	}
-	pub, ok := l.witnesses[witnessID]
-	if !ok {
-		return 0, false, ErrUnknownWitness
-	}
-	head, err := sth.ParseCanonical([]byte(canonical))
+	// The head check reads the tree under the read lock; the signature
+	// is then checked without a lock. A head that is this log's stays
+	// so: the tree only grows.
+	head, err := vetCosignature(cosigRules{witnesses: l.witnesses, ownHead: func(h sth.STH) bool {
+		l.mu.RLock()
+		defer l.mu.RUnlock()
+		return ownHeadOf(l.id, l.head.TreeSize, l.tree.RootAt)(h)
+	}}, witnessID, canonical, signature, publicKeyURL)
 	if err != nil {
-		return 0, false, fmt.Errorf("%w: sthCanonical: %v", ErrInvalidCosig, err)
-	}
-	if err := verifyCosignature(canonical, signature, pub); err != nil {
 		return 0, false, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if head.LogID != l.id || head.TreeSize > l.head.TreeSize {
-		return 0, false, ErrForeignSTH
-	}
-	if root, _ := l.tree.RootAt(head.TreeSize); root.String() != head.RootHash {
-		return 0, false, ErrForeignSTH
-	}
 	if _, dup := l.cosigByKey[cosigKey(witnessID, canonical)]; dup {
 		return l.cosigCounts[canonical], false, nil
 	}
@@ -722,7 +836,7 @@ func (l *Log) AddCosignature(witnessID, canonical, signature, publicKeyURL strin
 		l.log.Error("cosignature write failed; the log is now read-only", "err", err)
 		return 0, false, ErrReadOnly
 	}
-	l.addCosigLocked(c)
+	l.addCosigLocked(c, head.TreeSize)
 	return l.cosigCounts[canonical], true, nil
 }
 
@@ -744,8 +858,10 @@ func (l *Log) Cosignatures(size uint64, all bool) []Cosignature {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	out := []Cosignature{}
-	for _, c := range l.cosigs {
-		if all || c.TreeSize == size {
+	for i, c := range l.cosigs {
+		// By the size the signed sthCanonical names, not the record's
+		// own (unsigned) treeSize field.
+		if all || l.cosigSizes[i] == size {
 			out = append(out, c)
 		}
 	}

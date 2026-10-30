@@ -168,6 +168,60 @@ func reasonCases(t *testing.T) []reasonCase {
 		m["contentHash"] = "sha256:" + strings.Repeat("0", 64)
 		m["signature"] = identityR
 	})
+	v2("empty contentHash present", func(m map[string]any) { m["contentHash"] = "" })
+	v2("missing canonical", func(m map[string]any) { delete(m, "canonical") })
+	v2("missing signature", func(m map[string]any) { delete(m, "signature") })
+	v2("no v2= prefix", func(m map[string]any) { m["signature"] = strings.TrimPrefix(m["signature"].(string), "v2=") })
+	v2("tampered envelope field", func(m map[string]any) { m["overall"] = "tampered" })
+	v2("absent envelope field", func(m map[string]any) { m["unsigned"] = 1 })
+	// The receipt nests deeper than 64 (its object is one level), which
+	// ParseReceipt would refuse first; the verifier refuses it too.
+	{
+		last := out[len(out)-1]
+		r := last.r
+		r.Envelope = map[string]json.RawMessage{}
+		for k, v := range last.r.Envelope {
+			r.Envelope[k] = v
+		}
+		delete(r.Envelope, "unsigned")
+		r.Envelope["deep"] = json.RawMessage(strings.Repeat("[", 64) + strings.Repeat("]", 64))
+		out = append(out, reasonCase{name: "receipt nesting over 64", r: r, key: last.key})
+	}
+
+	// Receipts signed here, with a key made for the test.
+	signer := testutil.Key(t)
+	signerPub := signer.Public().(ed25519.PublicKey)
+	signed := func(name, canonical string, sig []byte, envelope map[string]any) {
+		if sig == nil {
+			sig = ed25519.Sign(signer, []byte(canonical))
+		}
+		m := map[string]any{"canonical": canonical, "signature": "v2=" + base64.StdEncoding.EncodeToString(sig)}
+		for k, v := range envelope {
+			m[k] = v
+		}
+		body, _ := json.Marshal(m)
+		r, err := vaos.ParseReceipt(body)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out = append(out, reasonCase{name: name, r: r, key: signerPub})
+	}
+	signed("canonical not JSON", `{"overall":`, nil, nil)
+	signed("canonical nested too deep", `{"d":`+strings.Repeat("[", 70)+strings.Repeat("]", 70)+`}`, nil, nil)
+	good := `{"overall":"pass"}`
+	full := ed25519.Sign(signer, []byte(good))
+	signed("63-byte signature", good, full[:63], map[string]any{"overall": "pass"})
+	signed("65-byte signature", good, append(append([]byte(nil), full...), 0), map[string]any{"overall": "pass"})
+	rules := `{"rules":[{"reason":"no","ruleId":"r2","verdict":"fail"},{"reason":"ok","ruleId":"r1","verdict":"pass"}]}`
+	envRules := func(verdict string) map[string]any {
+		return map[string]any{"totalMs": 3, "rules": []any{
+			map[string]any{"ruleId": "r1", "verdict": "pass", "reason": "ok", "ms": 1},
+			map[string]any{"ruleId": "r2", "verdict": verdict, "reason": "no", "ms": 2},
+		}}
+	}
+	signed("Guardian attestation", rules, nil, envRules("fail"))
+	signed("Guardian attestation, tampered rule", rules, nil, envRules("pass"))
+	signed("Guardian attestation, wrong key", rules, ed25519.Sign(testutil.Key(t), []byte(rules)), envRules("fail"))
 	return out
 }
 

@@ -14,7 +14,7 @@ IMAGE     ?= receipts-log:$(VERSION)
 FUZZ_TARGETS := \
 	merkle:FuzzVerifyInclusion merkle:FuzzVerifyConsistency merkle:FuzzParseHashes \
 	sth:FuzzCanonicalString sth:FuzzParseCanonical sth:FuzzVerify \
-	keys:FuzzParsePEM store:FuzzScan translog:FuzzAppend server:FuzzHandler
+	keys:FuzzParsePEM store:FuzzScan translog:FuzzAppend translog:FuzzVerifyIssued server:FuzzHandler
 
 .PHONY: all build test race vet fmt fmt-check staticcheck fuzz interop check docker clean
 

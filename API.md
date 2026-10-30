@@ -59,13 +59,18 @@ the verifiable-receipts witness CLI checks tree heads.
 | Concurrent requests | `-max-in-flight`, default 256 (503 with `Retry-After: 1` above it) |
 | Timeouts | header 5 s, read 20 s, write 40 s, idle 90 s |
 | Verification per `POST /v1/entries` | at most one check of R and S (about 0.7 ms on an Apple M4), then one `crypto/ed25519` check per issuer key (about 0.03 ms each); only under a key the signature verifies under is the receipt checked in full, with one or two more checks of R |
-| Verification per `POST /v1/cosignatures` | one check of the witness signature under the strict profile (about 0.7 ms) |
+| Verification per `POST /v1/cosignatures` | one check of the witness signature under the strict profile (about 0.7 ms), made only when the tree head is this log's |
 
 The log authenticates no client: anyone who can reach it can submit a receipt
 or a cosignature, and the log checks each signature before it refuses it. The
 strict profile's check of R (VAOS 2.0 §7.3) is point arithmetic in `math/big`,
-so a refused request costs about 0.7 ms of CPU, however many issuer keys the
-log has, against about 150 bytes from the client. `-max-in-flight` bounds how
+about 0.7 ms of CPU, against about 150 bytes from the client. A forged
+signature costs one such check, however many issuer keys the log has. The
+worst case needs no key either: a genuine receipt, which anyone can read from
+the log, submitted again with an envelope field changed passes the signature
+and fails at the envelope, after `VerifyV2Receipt` has checked R a second time
+and, when the receipt has `rules` or `totalMs`, `VerifyGuardianAttestation` a
+third: about 2.1 ms, plus about 0.03 ms per issuer key. `-max-in-flight` bounds how
 many run at once, not how many arrive. Before a public deployment, put a
 reverse proxy in front of the log that limits the request rate per client
 address on `POST /v1/entries` and `POST /v1/cosignatures` (for example nginx
@@ -230,10 +235,15 @@ A witness submits its signature over an STH:
 ```
 
 The log records it when `witnessId` is configured (`-witness-key NAME=FILE`),
-the signature verifies under that witness's key (under the strict Ed25519
-profile of VAOS 2.0 §7.3, as for receipts), `sthCanonical` is in canonical
-form, and it names this log and a root this log had at that tree size.
-Cosignatures are stored durably; a repeated submission is not stored twice.
+`sthCanonical` is in canonical form and names this log, a tree size it has
+reached and the root it had at that size, and the signature verifies under
+that witness's key (under the strict Ed25519 profile of VAOS 2.0 §7.3, as for
+receipts). It checks in that order and answers the first failure: 400 for an
+invalid `witnessId` or `publicKeyUrl`, 403 for an unknown witness, 400 for a
+non-canonical `sthCanonical`, 409 for a tree head that is not this log's, then
+422 for the signature. The tree-head check is cheap, so it comes before the
+signature: a foreign head with a bad signature gets 409. Cosignatures are
+stored durably; a repeated submission is not stored twice.
 
 ```json
 {"ok": true, "recorded": true, "firstForThisSth": true, "witnessCount": 1}
@@ -244,7 +254,7 @@ Cosignatures are stored durably; a repeated submission is not stored twice.
 | 200 | Recorded, or already recorded (`recorded: false`) |
 | 400 | Malformed body or non-canonical `sthCanonical` |
 | 403 | Unknown witness |
-| 409 | The tree head is not one this log produced |
+| 409 | The tree head is not one this log produced (checked before the signature) |
 | 413 | Body larger than 64 KiB |
 | 415 | Content type other than `application/json` |
 | 422 | The witness signature does not verify; `error` is `witness signature does not verify: ` and the reason, one of the signature reasons of `POST /v1/entries` or `signature is not v2`, `signature is not base64 of 64 bytes`, `signature is not canonical base64` |
@@ -253,7 +263,14 @@ Cosignatures are stored durably; a repeated submission is not stored twice.
 ### `GET /v1/cosignatures?treeSize=<n>`
 
 `treeSize` is required (400 without it). The response lists the cosignatures
-recorded for tree heads of that size:
+recorded for tree heads of that size, selected by the size their signed
+`sthCanonical` names. A stored record is served only as evidence of this log:
+when the server opens its data directory it skips, with a warning in its log,
+a record whose `sthCanonical` is not a head of this log (another log ID, a
+size it never reached, or a root it never had) or whose `treeSize`,
+`rootHash` or `timestamp` differ from that head; the store still opens. It
+does not re-verify stored signatures; `receipts-log check -witness-key` does
+(README).
 
 ```json
 {"treeSize": 7, "cosignatures": [{"witnessId": "w1", "treeSize": 7, "rootHash": "<hex>", "timestamp": "...", "sthCanonical": "...", "signature": "v2=...", "publicKeyUrl": "...", "receivedAt": "..."}]}

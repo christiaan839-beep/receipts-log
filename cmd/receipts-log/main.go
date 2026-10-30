@@ -174,7 +174,7 @@ func cmdServe(args []string, stderr io.Writer) error {
 	issuers := envList("RECEIPTS_LOG_ISSUER_KEYS")
 	fs.Var(&issuers, "issuer-key", "SPKI PEM Ed25519 issuer public key; repeat for several (RECEIPTS_LOG_ISSUER_KEYS, comma-separated)")
 	witnesses := envList("RECEIPTS_LOG_WITNESS_KEYS")
-	fs.Var(&witnesses, "witness-key", "NAME=FILE: a witness ID and its SPKI PEM public key; repeat for several (RECEIPTS_LOG_WITNESS_KEYS, comma-separated)")
+	fs.Var(&witnesses, "witness-key", "NAME=FILE: a witness ID and its SPKI PEM public key; repeat for several, each NAME once (RECEIPTS_LOG_WITNESS_KEYS, comma-separated)")
 	maxEntry := fs.Int("max-entry-bytes", store.DefaultMaxPayload, "largest receipt accepted, in bytes")
 	sthInterval := fs.Duration("sth-interval", time.Hour, "re-sign the tree head this often when idle (0 disables)")
 	maxInFlight := fs.Int("max-in-flight", server.DefaultMaxInFlight, "concurrent requests before 503")
@@ -289,6 +289,9 @@ func loadWitnessKeys(flags []string) (map[string]ed25519.PublicKey, error) {
 		name, path, ok := strings.Cut(w, "=")
 		if !ok || name == "" || path == "" {
 			return nil, fmt.Errorf("-witness-key %q: want NAME=FILE", w)
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("-witness-key %s given twice", name)
 		}
 		k, err := keys.LoadPublicKey(path)
 		if err != nil {
