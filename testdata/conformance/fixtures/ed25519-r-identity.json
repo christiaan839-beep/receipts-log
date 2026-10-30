@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 R is the identity (order 1), S = k*a, ordinary key; the cofactorless and cofactored equations both hold. Before: valid under Node.js 22.23.2, Python cryptography and Go; invalid under Node.js 24.22.1 (OpenSSL 3.5.9) and 26.10.0 (OpenSSL 3.5.8)",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4kZ3/6NZR+jhRWdyzUUtrULpy4l8YkQbQVKYgQNm6pA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"r-identity\"}",
+    "contentHash": "sha256:52d97b42924430da78f44ff80aa6d4ab0f98473f048986a5d7bf80c56cda0408",
+    "signature": "v2=AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACZ1NGhOzwJJOpUtLKeUKorDpslgBIFpfGrHcvUT9bEAw=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "signature R is a small-order point"
+  }
+}

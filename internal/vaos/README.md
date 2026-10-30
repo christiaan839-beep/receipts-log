@@ -1,10 +1,12 @@
 # internal/vaos
 
-`verify.go` and `transparency.go` are copies of the Go verifier in
+`verify.go`, `transparency.go` and `edwards25519.go` are copies of the Go
+verifier in
 [verifiable-receipts](https://github.com/christiaan839-beep/verifiable-receipts)
-(`packages/verifiable-receipts-go`, commit `24f5c4780dba7c4f76b159b7f7844e17d0226cd6`),
-licensed Apache-2.0, and `contenthash_test.go`, `nesting_test.go` and
-`key_test.go` are copies of its tests from the same commit. The only change is
+(`packages/verifiable-receipts-go`, commit `f41348eac297c81e1c2a0dca91b7bd49dd2a5d9a`),
+licensed Apache-2.0, and `contenthash_test.go`, `nesting_test.go`,
+`key_test.go`, `edwards25519_test.go` and `strict_ed25519_test.go` are copies
+of its tests from the same commit. The only change is
 a provenance notice at the top of each file. `fixtures_test.go` gives the
 copied tests what they expect from the rest of that package's tests (the
 fixture paths, here this repository's copies, and two key helpers).
@@ -59,3 +61,22 @@ receipts, so admission follows the published verifier's rules. The tests use
 `VerifyInclusionProof` as an independent check on the proofs this log serves.
 `interop/interop_test.go` compares these files and the fixtures with a
 checkout of verifiable-receipts.
+
+Since f41348e every Ed25519 signature is checked under the strict profile of
+VAOS 2.0 §7.3 (amended 30 October 2026). Before `crypto/ed25519` sees it, the
+key must be a canonical encoding of a point of order L (not of small order,
+off the curve or of mixed order), the signature's R one too (the identity
+included among the points of small order), and its S below L. Each refusal
+has its reason: `public key is not a point on the curve`, `public key is not
+in the prime-order subgroup`, `signature R is not a canonical encoding`,
+`signature R is not a point on the curve`, `signature R is a small-order
+point` and `signature R is not in the prime-order subgroup`, besides the
+earlier key reasons and `signature does not verify under the supplied public
+key` (S of L or more included). `edwards25519.go` does the point arithmetic
+with `math/big`. `VerifyV2Receipt` applies the profile, and `VerifyEd25519`
+checks one raw signature with it: `internal/sth.VerifyBytes` uses it for tree
+heads and cosignatures, and `sth.SignBytes` checks each signature it makes
+with it. `LoadEd25519PublicKeyFromPEM`, and so `internal/keys.CheckPublicKey`,
+refuse the new keys too. The fixtures `ed25519-*.json` are copied into
+`testdata/conformance/fixtures/`: the admission tests run those given as
+receipts, and `internal/sth` runs all of them through `VerifyBytes`.

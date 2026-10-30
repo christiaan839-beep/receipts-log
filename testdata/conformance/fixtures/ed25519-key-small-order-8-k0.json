@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 A = T8 (order 8), R = identity, S = 0, k = 0 mod 8; the cofactorless and cofactored equations both hold. Before: refused as a small-order key (the blocklist)",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAxxdqcD1N2E+6PAt2DRBnDyogU/osOczGTsf9d5KsA3o=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":23,\"vector\":\"key-small-order-8-k0\"}",
+    "contentHash": "sha256:fd652e1c07424ba0e57ac82652d76620043386733bebe4abd54f8a0b3f289993",
+    "signature": "v2=AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "public key is a small-order point"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 A encodes y = 2, which has no x on the curve. Before: rejected, signature does not verify under the supplied public key",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"key-off-curve\"}",
+    "contentHash": "sha256:59b2d50ce4ca864f549da4bc5f0eb7048a1beca50d82c0d8b909a3227ce28d9a",
+    "signature": "v2=/n0HfE7mZx8MYrXIbhfhh52v8MXcSU/DULZr+xUEfU1oWTQhDT3NBeOOmOHU0jJ6GTfBXplZTpd27KUaLc8PCg=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "public key is not a point on the curve"
+  }
+}

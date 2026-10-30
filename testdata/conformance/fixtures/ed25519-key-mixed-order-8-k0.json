@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 A = [a]B + T8 (mixed order), R = [r]B, S = r + k*a, k = 0 mod 8; the cofactorless and cofactored equations both hold. Before: valid under Node.js, Python cryptography, Go and Chromium; invalid under WebKit on Linux",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAH77/z7edt5Ufm4dBwVD10+lERVeUzaPnxbgamezsPIU=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":3,\"vector\":\"key-mixed-order-8-k0\"}",
+    "contentHash": "sha256:c9ae3ffab34e477643b86d632e7d882f4b62425b0769d301fa1419a997942000",
+    "signature": "v2=/n0HfE7mZx8MYrXIbhfhh52v8MXcSU/DULZr+xUEfU0CzJcW9fp5ZOilsOwXysu2H4J3XA2rpFZEp3eW2zjiCA=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "public key is not in the prime-order subgroup"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 R = [r]B + T8 (mixed order), S = r + k*a, ordinary key; only the cofactored equation holds. Before: rejected, signature does not verify",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4kZ3/6NZR+jhRWdyzUUtrULpy4l8YkQbQVKYgQNm6pA=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"r-mixed-order\"}",
+    "contentHash": "sha256:a223c6039454eb58a6acc7c56b38c13f52d5a4a18098c3cda280e7cf319c1feb",
+    "signature": "v2=OCAqHZ0Pmr84kiZ4aBwV5NB7EjEdmoKio+5OW0Ta43m8GZWZw7cUYzFlw1MuLb/L72+Q3AKXVvIRgvI04ZpLDg=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "signature R is not in the prime-order subgroup"
+  }
+}

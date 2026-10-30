@@ -1,0 +1,13 @@
+{
+  "description": "v2 invalid (strict Ed25519) \u2014 A = [a]B + T2 (mixed order), R = [r]B, S = r + k*a, k = 0 mod 2; the cofactorless and cofactored equations both hold. Before: valid under Node.js, Python cryptography and Go",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAC7mIAFymuBceupiNMrrSUr0WNHaDnbvkvq1nfvyZFW8=\n-----END PUBLIC KEY-----\n",
+  "receipt": {
+    "canonical": "{\"nonce\":0,\"vector\":\"key-mixed-order-2-k0\"}",
+    "contentHash": "sha256:324148778ead11b8ad66d50fac3f49b67b386b1d199a05ffcf594574751ce176",
+    "signature": "v2=/n0HfE7mZx8MYrXIbhfhh52v8MXcSU/DULZr+xUEfU3yWCvi3dLaN96sLX0osZilRBQQOy8hBIFkhMuilPEYCg=="
+  },
+  "expected": {
+    "ok": false,
+    "reasonContains": "public key is not in the prime-order subgroup"
+  }
+}
