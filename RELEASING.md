@@ -16,6 +16,9 @@ A release is a `vX.Y.Z` tag on a commit on `main`. Pushing the tag starts
 
 ## A release
 
+Move the `Unreleased` notes in `CHANGELOG.md` under the new version and merge
+that first: the release notes are that section. Then tag the merge commit:
+
 ```
 git tag -s v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
