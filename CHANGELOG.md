@@ -6,7 +6,45 @@ Notable changes to receipts-log. The format follows
 
 ## [Unreleased]
 
+To be released as v0.2.0. v0.1.0 was tagged but never released, so v0.2.0 is
+the first release; it includes everything listed under 0.1.0.
+
+### Security
+
+- Every Ed25519 signature the log or the witness checks, of a receipt, a tree
+  head or a cosignature, is checked under the strict profile of VAOS 2.0 §7.3
+  (amended 30 October 2026), by the verifiable-receipts Go verifier now copied
+  into `internal/vaos` at verifiable-receipts f41348e (`VerifyEd25519`, with
+  `math/big` point arithmetic in `edwards25519.go`). Before `crypto/ed25519`
+  sees a signature, the key and the signature's R must be canonical encodings
+  of points of order L and S must be below L. 0.1.0 admitted a receipt whose R
+  is the identity (S = k·a under an ordinary key), which Node.js 24.22 and 26
+  refuse, and accepted issuer and witness keys of mixed order, under which
+  verifiers disagree. New reasons in the 422 `error` of `POST /v1/entries`:
+  `signature R is not a canonical encoding`, `signature R is not a point on
+  the curve`, `signature R is a small-order point`, `signature R is not in the
+  prime-order subgroup`.
+- Issuer, witness and log public keys that are off the curve (`public key is
+  not a point on the curve`) or of mixed order (`public key is not in the
+  prime-order subgroup`) are refused when they are loaded, as keys of small
+  order already were: `serve`, `witness`, `check`, `prove` and `sth` exit 2.
+  `translog.Open` also refuses a log signing key whose public half does not
+  match its seed.
+- `sth.Sign` and the witness sign through the new `sth.SignBytes`, which checks
+  each signature under the strict profile before returning it, so no tree head
+  or cosignature is published that a strict verifier rejects.
+
+### Changed
+
+- A refused cosignature's 422 `error` now carries the reason:
+  `witness signature does not verify: <reason>`.
+- A store written by an older build still opens and serves; `check
+  -issuer-key` lists the receipts the strict profile refuses as nonconforming
+  (exit 3), with these reasons (README, "After upgrading").
+
 ## [0.1.0] — 2026-10-30
+
+Tagged, never released; its changes ship in 0.2.0.
 
 The first release: a transparency log and witness for verifiable receipts, in
 Go with the standard library only.

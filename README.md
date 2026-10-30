@@ -29,6 +29,11 @@ consistency proof that any witness or auditor can check.
   heads, inclusion proofs and consistency proofs.
 - Signs tree heads with an Ed25519 log key in the verifiable-receipts STH format
   (`v2=` signature over the `JSON.stringify` canonical string).
+- Checks every Ed25519 signature, of a receipt, a tree head or a cosignature,
+  under the strict profile of VAOS 2.0 §7.3: the key and the signature's R
+  must be canonical encodings of points of order L and S must be below L
+  before `crypto/ed25519` checks it, so this log and the verifiable-receipts
+  verifiers give one verdict on every signature.
 - Stores entries in an append-only, checksummed file that is fsynced before
   each acknowledgement, and verifies the whole store against the signed
   checkpoint every time it opens.
@@ -89,8 +94,10 @@ dist/receipts-log serve \
 ```
 
 Every command refuses a public key file (issuer, witness or log key) that holds
-an Ed25519 point of small order or a non-canonical encoding (VAOS 2.0 §7.3):
-under the identity key, for one, a single signature verifies every message.
+an Ed25519 key that is not a canonical encoding of a point of order L (VAOS 2.0
+§7.3): a point of small order, a non-canonical encoding, a point off the curve
+or a point of mixed order. Under the identity key, for one, a single signature
+verifies every message; under a key of mixed order verifiers disagree.
 
 The `serve` flags that name files, identifiers, the address and the log level
 also read environment variables (`RECEIPTS_LOG_DATA`, `RECEIPTS_LOG_ID`,
@@ -154,6 +161,26 @@ small order or a non-canonical encoding, for example `error: -issuer-key
 issuer.pem: keys: public key is a small-order point` or `error: -witness-key
 w1: w1.pub: keys: public key is not a canonical encoding`. Replace the key;
 the log cannot be served with it.
+
+Builds before the sync with verifiable-receipts f41348e (v0.2.0) checked
+Ed25519 signatures with `crypto/ed25519` alone. They admitted a receipt whose
+signature's R is the identity point (with S = k·a under an ordinary key),
+which Node.js 24.22 and 26 refuse, and they accepted issuer and witness keys of
+mixed order, under which verifiers disagree. Every signature is now checked
+under the strict profile of VAOS 2.0 §7.3, and `check -issuer-key` reports such
+a receipt with the reason `receipt signature does not verify under any
+configured issuer key: signature R is a small-order point` (or `… is not a
+canonical encoding`, `… is not a point on the curve`, `… is not in the
+prime-order subgroup`). `serve`, `witness`, `check`, `prove` and `sth` now also
+refuse a key file holding a point off the curve (`keys: public key is not a
+point on the curve`) or of mixed order (`keys: public key is not in the
+prime-order subgroup`), with exit 2. Replace such an issuer key: the store
+still opens and serves without it, and `check` with the keys you configure
+now lists each receipt it signed with `… signature does not verify under the
+supplied public key`. `check` refuses the old key itself, as `serve` does. A
+cosignature whose signature fails the profile is refused with 422 and its
+reason, `witness signature does not verify: signature R is a small-order
+point` for one.
 
 Run a witness, once or as a daemon (default interval one hour):
 
