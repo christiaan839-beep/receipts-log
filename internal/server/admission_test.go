@@ -144,3 +144,31 @@ func TestEntriesSignatureBase64Reasons(t *testing.T) {
 		}
 	}
 }
+
+// The strict Ed25519 profile of VAOS 2.0 section 7.3: a signature whose
+// R is the identity (S = k*a) verifies under crypto/ed25519 but is
+// refused, a receipt with 422 and a cosignature with 422, each with the
+// verifier's reason in error.
+func TestStrictEd25519RefusalsAre422(t *testing.T) {
+	f := setup(t)
+	canonical := `{"overall":"pass"}`
+	sig := testutil.IdentityRSignature(f.issuer, []byte(canonical))
+	body := []byte(`{"canonical":"{\"overall\":\"pass\"}","overall":"pass","signature":"v2=` +
+		base64.StdEncoding.EncodeToString(sig) + `"}`)
+	code, out := f.do(t, "POST", "/v1/entries", body)
+	if code != http.StatusUnprocessableEntity ||
+		!strings.Contains(string(out), "receipt signature does not verify under any configured issuer key: signature R is a small-order point") {
+		t.Fatalf("receipt: got %d %s, want 422 naming R", code, out)
+	}
+	if code, out := f.do(t, "POST", "/v1/entries", testutil.Receipt(t, f.issuer, map[string]any{"runId": "ok"})); code != http.StatusCreated {
+		t.Fatalf("append: %d %s", code, out)
+	}
+	c, _ := f.log.STH().Canonical()
+	cosig, _ := json.Marshal(map[string]string{"witnessId": "w1", "sthCanonical": string(c),
+		"signature": "v2=" + base64.StdEncoding.EncodeToString(testutil.IdentityRSignature(f.witness, c))})
+	code, out = f.do(t, "POST", "/v1/cosignatures", cosig)
+	if code != http.StatusUnprocessableEntity ||
+		!strings.Contains(string(out), "witness signature does not verify: signature R is a small-order point") {
+		t.Fatalf("cosignature: got %d %s, want 422 naming R", code, out)
+	}
+}

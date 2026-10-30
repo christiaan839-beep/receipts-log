@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/christiaan839-beep/receipts-log/internal/keys"
 	"github.com/christiaan839-beep/receipts-log/internal/logclient"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
 	"github.com/christiaan839-beep/receipts-log/internal/sth"
@@ -145,6 +146,11 @@ func RunOnce(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.WitnessID == "" || cfg.StatePath == "" {
 		return Result{}, errors.New("witness: witness ID and state path are required")
 	}
+	// VAOS 2.0 section 7.3: under a log key of small or mixed order,
+	// verifiers disagree on which tree heads are signed.
+	if err := keys.CheckPublicKey(cfg.LogKey); err != nil {
+		return Result{}, fmt.Errorf("witness: log key: %w", err)
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
@@ -204,9 +210,15 @@ func RunOnce(ctx context.Context, cfg Config) (Result, error) {
 	var sub struct {
 		WitnessCount int `json:"witnessCount"`
 	}
+	// SignBytes refuses a witness key whose public half is weak or does
+	// not match its seed, so the log can verify the cosignature.
+	cosig, err := sth.SignBytes(canonical, cfg.Key)
+	if err != nil {
+		return res, fmt.Errorf("witness: %w", err)
+	}
 	body, err := json.Marshal(cosignRequest{
 		WitnessID:    cfg.WitnessID,
-		Signature:    sth.EncodeSignature(ed25519.Sign(cfg.Key, canonical)),
+		Signature:    cosig,
 		STHCanonical: string(canonical),
 		PublicKeyURL: cfg.PublicKeyURL,
 	})

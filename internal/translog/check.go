@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/christiaan839-beep/receipts-log/internal/keys"
 	"github.com/christiaan839-beep/receipts-log/internal/merkle"
 	"github.com/christiaan839-beep/receipts-log/internal/store"
 )
@@ -76,6 +77,9 @@ type CheckOptions struct {
 func Check(dir, logID string, pub ed25519.PublicKey,
 	opts CheckOptions) (CheckReport, error) {
 	var rep CheckReport
+	if err := keys.CheckPublicKey(pub); err != nil {
+		return rep, fmt.Errorf("translog: log key: %w", err)
+	}
 	issuerKeys := opts.IssuerKeys
 	if err := validateIssuerKeys(issuerKeys); err != nil {
 		return rep, err

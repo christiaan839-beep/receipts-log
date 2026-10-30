@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,8 +121,8 @@ func Open(cfg Config) (*Log, error) {
 	if err := sth.ValidateLogID(cfg.LogID); err != nil {
 		return nil, err
 	}
-	if len(cfg.Key) != ed25519.PrivateKeySize {
-		return nil, errors.New("translog: a log signing key is required")
+	if err := checkLogKey(cfg.Key); err != nil {
+		return nil, err
 	}
 	if len(cfg.IssuerKeys) == 0 {
 		return nil, errors.New("translog: at least one issuer key is required")
@@ -334,10 +335,28 @@ func LeafForReceipt(body []byte) (merkle.Hash, error) {
 	return merkle.LeafHash([]byte(canonical)), nil
 }
 
+// checkLogKey refuses a log signing key whose public half does not
+// match its seed or is not a point of order L (VAOS 2.0 section 7.3):
+// strict verifiers would reject every tree head signed with it.
+func checkLogKey(key ed25519.PrivateKey) error {
+	if len(key) != ed25519.PrivateKeySize {
+		return errors.New("translog: a log signing key is required")
+	}
+	pub := key.Public().(ed25519.PublicKey)
+	if !ed25519.NewKeyFromSeed(key.Seed()).Public().(ed25519.PublicKey).Equal(pub) {
+		return errors.New("translog: log key: the public half does not match the seed")
+	}
+	if err := keys.CheckPublicKey(pub); err != nil {
+		return fmt.Errorf("translog: log key: %w", err)
+	}
+	return nil
+}
+
 // validateIssuerKeys refuses an issuer key that is not a usable Ed25519
-// public key, a small-order or non-canonical one included (VAOS 2.0
-// section 7.3): under the identity key one signature verifies every
-// receipt.
+// public key: one that is not a canonical encoding of a point of order L
+// (small order, mixed order, off the curve or non-canonical; VAOS 2.0
+// section 7.3). Under the identity key one signature verifies every
+// receipt, and under a mixed-order key verifiers disagree.
 func validateIssuerKeys(issuers []ed25519.PublicKey) error {
 	for i, k := range issuers {
 		if err := keys.CheckPublicKey(k); err != nil {
@@ -583,8 +602,11 @@ func (l *Log) AddCosignature(witnessID, canonical, signature, publicKeyURL strin
 	if err != nil {
 		return 0, false, fmt.Errorf("%w: sthCanonical: %v", ErrInvalidCosig, err)
 	}
+	// Strict Ed25519 (VAOS 2.0 section 7.3), as sth.VerifyBytes checks
+	// every signature; the error carries the verifier's reason.
 	if err := sth.VerifyBytes([]byte(canonical), signature, pub); err != nil {
-		return 0, false, ErrWitnessSignature
+		reason := strings.TrimPrefix(err.Error(), sth.ErrSignature.Error()+": ")
+		return 0, false, fmt.Errorf("%w: %s", ErrWitnessSignature, reason)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()

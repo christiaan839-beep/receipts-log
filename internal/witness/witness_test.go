@@ -3,11 +3,13 @@ package witness
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -130,6 +132,24 @@ func TestWitnessRejectsBadInput(t *testing.T) {
 	if _, err := RunOnce(context.Background(), cfg); err == nil {
 		t.Fatal("tree head under the wrong log key accepted")
 	}
+	// A log key of mixed order (ed25519-key-mixed-order-8.json) is refused
+	// before anything is fetched (VAOS 2.0 section 7.3).
+	mixed, _ := hex.DecodeString("1fbeffcfb79db7951f9b8741c150f5d3e944455794cda3e7c5b81a99ecec3c85")
+	cfg.LogKey = mixed
+	if _, err := RunOnce(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "public key is not in the prime-order subgroup") {
+		t.Fatalf("mixed-order log key: %v", err)
+	}
+	// A witness key whose public half does not match its seed: its
+	// cosignature would not verify, so the witness does not send it.
+	cfg.LogKey = logKey.Public().(ed25519.PublicKey)
+	cfg.Key = append(append(ed25519.PrivateKey{}, wKey.Seed()...), testutil.Key(t).Public().(ed25519.PublicKey)...)
+	if _, err := RunOnce(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "signing key") {
+		t.Fatalf("inconsistent witness key: %v", err)
+	}
+	if _, err := os.Stat(cfg.StatePath); err == nil {
+		t.Fatal("state saved although nothing was cosigned")
+	}
+	cfg.Key = wKey
 	cfg.LogKey = logKey.Public().(ed25519.PublicKey)
 	os.WriteFile(cfg.StatePath, []byte("{not json"), 0o600)
 	if _, err := RunOnce(context.Background(), cfg); err == nil {
