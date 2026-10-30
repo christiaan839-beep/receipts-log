@@ -39,8 +39,20 @@ the first release; it includes everything listed under 0.1.0.
   bytes, no key needed) costs about one subgroup check, 0.89 ms with 8 issuer
   keys instead of 11.3 ms (0.70 ms instead of 1.4 ms with one; Apple M4). Each key then
   costs one `crypto/ed25519` check, and `VerifyGuardianAttestation` runs only
-  under a key the signature verifies under. The reason a client gets is the
-  same as before with one issuer key, for every input.
+  under a key the signature verifies under, and only for a receipt with
+  `rules` or `totalMs`. The reason a client gets is the same as before with
+  one issuer key, for every input.
+- A stored cosignature is served only as evidence of this log. When the
+  server opens a data directory it skips, with a warning, a record whose
+  `sthCanonical` is not a head of this log (another log, a fork, a size never
+  reached) or whose `treeSize`, `rootHash` or `timestamp` differ from that
+  head, and still opens. `GET /v1/cosignatures?treeSize=` selects by the size
+  the signed `sthCanonical` names, not the record's own field: before, a
+  record could be served under a size its signature does not cover.
+  `check -witness-key` now applies every rule of `POST /v1/cosignatures` to
+  stored records, the tree-head check included, and reports a record whose
+  fields disagree with its head as `cosignature record disagrees with its
+  signed tree head`.
 - `API.md` "Limits" gives the verification cost of each request and
   recommends a per-client rate limit in a reverse proxy in front of a public
   log.
@@ -57,6 +69,10 @@ the first release; it includes everything listed under 0.1.0.
   it: a reason about the receipt itself first, then one about R, then
   `signature does not verify under any of the N issuer keys`. It was the first
   key's reason. With one key it is unchanged.
+- `POST /v1/cosignatures` checks that the tree head is this log's (409) before
+  the signature (422), so a foreign head no longer costs a subgroup check; a
+  foreign head with a bad signature now gets 409.
+- `serve` and `check` refuse a `-witness-key` NAME given twice (exit 2).
 
 ### Added
 

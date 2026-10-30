@@ -63,10 +63,14 @@ type Nonconforming struct {
 }
 
 // NonconformingCosignature is a stored cosignature that the log refuses
-// today. Index is its line in cosignatures.jsonl, from 0. Reason is the
-// error POST /v1/cosignatures returns for it: its witness is not
-// configured, or its signature does not verify under the witness's key
-// (the strict profile of VAOS 2.0 section 7.3 included).
+// today. Index is its line in cosignatures.jsonl, from 0, and TreeSize
+// the record's own treeSize field. Reason is the error POST
+// /v1/cosignatures returns for it (an invalid label or sthCanonical, a
+// witness not configured, a tree head this log did not produce, or a
+// signature that does not verify under the witness's key, the strict
+// profile of VAOS 2.0 section 7.3 included), in that order; or, when it
+// passes all of those, ErrCosigRecord: its treeSize, rootHash or
+// timestamp differ from the head its sthCanonical signs.
 type NonconformingCosignature struct {
 	Index     uint64 `json:"index"`
 	WitnessID string `json:"witnessId"`
@@ -107,13 +111,15 @@ type CheckOptions struct {
 // under older rules, and the log keeps them. An integrity error is
 // returned as without issuer keys.
 //
-// With opts.WitnessKeys, Check also verifies every stored cosignature
-// with sth.VerifyBytes under the key of its witness, as AddCosignature
-// does, and reports those whose witness is not among the keys or whose
-// signature does not verify in the NonconformingCosignature fields. Open
-// loads cosignatures without verifying them, so these too were recorded
-// under older rules and are kept; a line that is not a cosignature's
-// JSON is an integrity error, as for Open.
+// With opts.WitnessKeys, Check also checks every stored cosignature by
+// the rules AddCosignature applies, against this log's tree as the
+// checkpoint covers it, and that the record's fields are those of the
+// head it signs, and reports those that fail in the
+// NonconformingCosignature fields. They are kept: Open skips (and does
+// not serve) those whose head is not this log's or whose fields
+// disagree, and serves the others without verifying their signatures. A
+// line that is not a cosignature's JSON is an integrity error, as for
+// Open.
 func Check(dir, logID string, pub ed25519.PublicKey,
 	opts CheckOptions) (CheckReport, error) {
 	var rep CheckReport
@@ -190,32 +196,35 @@ func Check(dir, logID string, pub ed25519.PublicKey,
 		return rep, err
 	}
 	if len(opts.WitnessKeys) > 0 {
-		if err := checkCosignatures(dir, opts.WitnessKeys, limit, &rep); err != nil {
+		if err := checkCosignatures(dir, logID, ck.TreeSize, &tree, opts.WitnessKeys, limit, &rep); err != nil {
 			return rep, err
 		}
 	}
 	return rep, nil
 }
 
-// checkCosignatures verifies the stored cosignatures for Check.
-func checkCosignatures(dir string, witnesses map[string]ed25519.PublicKey, limit int, rep *CheckReport) error {
+// checkCosignatures verifies the stored cosignatures for Check, by the
+// rules AddCosignature applies (vetCosignature), against the log logID
+// whose checkpoint covers size entries of tree; then that the record's
+// fields are those of the head it signs (storedCosignatureHead).
+func checkCosignatures(dir, logID string, size uint64, tree *merkle.Tree, witnesses map[string]ed25519.PublicKey,
+	limit int, rep *CheckReport) error {
 	var n, badCount uint64
 	var bad []NonconformingCosignature
+	rules := cosigRules{witnesses: witnesses, ownHead: ownHeadOf(logID, size, tree.RootAt)}
 	err := store.ReadCosignatures(dir, func(line []byte) error {
 		var c Cosignature
 		if err := json.Unmarshal(line, &c); err != nil {
 			return err
 		}
-		reason := ""
-		if pub, ok := witnesses[c.WitnessID]; !ok {
-			reason = ErrUnknownWitness.Error()
-		} else if err := verifyCosignature(c.STHCanonical, c.Signature, pub); err != nil {
-			reason = err.Error()
+		_, err := vetCosignature(rules, c.WitnessID, c.STHCanonical, c.Signature, c.PublicKeyURL)
+		if err == nil {
+			_, err = storedCosignatureHead(c, logID, size, tree.RootAt)
 		}
-		if reason != "" {
+		if err != nil {
 			badCount++
 			if len(bad) < limit {
-				bad = append(bad, NonconformingCosignature{Index: n, WitnessID: c.WitnessID, TreeSize: c.TreeSize, Reason: reason})
+				bad = append(bad, NonconformingCosignature{Index: n, WitnessID: c.WitnessID, TreeSize: c.TreeSize, Reason: err.Error()})
 			}
 		}
 		n++

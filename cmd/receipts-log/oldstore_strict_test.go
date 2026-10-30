@@ -379,3 +379,29 @@ func TestOldStrictCosignatureCheckNonconforming(t *testing.T) {
 		t.Fatalf("check -witness-key without a file: exit %d: %s %s", code, out, e)
 	}
 }
+
+// A witness NAME given twice to -witness-key is an error (exit 2) for
+// check and serve, not a silent choice of the last key.
+func TestRepeatedWitnessKeyNameIsRefused(t *testing.T) {
+	o := newStrictOldStore(t)
+	_, second, _ := strings.Cut(o.witnessFlags[1], "=")
+	dup := "w1=" + second
+	if _, err := loadWitnessKeys([]string{o.witnessFlags[0], dup}); err == nil ||
+		!strings.Contains(err.Error(), `-witness-key w1 given twice`) {
+		t.Fatalf("loadWitnessKeys: %v", err)
+	}
+	code, out, e := runCLI(t, "check", "-data", o.dir, "-log-id", "old-log", "-log-public-key", o.logPub,
+		"-witness-key", o.witnessFlags[0], "-witness-key", dup)
+	if code != exitUsage || !strings.Contains(e, "given twice") {
+		t.Fatalf("check: exit %d: %s %s", code, out, e)
+	}
+	logKey := filepath.Join(t.TempDir(), "log.key")
+	if code, out, e := runCLI(t, "keygen", "-out", logKey); code != 0 {
+		t.Fatalf("keygen: %d %s %s", code, out, e)
+	}
+	code, out, e = runCLI(t, "serve", "-data", o.dir, "-log-id", "old-log", "-log-key", logKey,
+		"-issuer-key", o.honestPub, "-witness-key", o.witnessFlags[0], "-witness-key", dup)
+	if code != exitUsage || !strings.Contains(e, "given twice") {
+		t.Fatalf("serve: exit %d: %s %s", code, out, e)
+	}
+}

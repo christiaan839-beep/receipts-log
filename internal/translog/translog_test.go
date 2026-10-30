@@ -27,6 +27,7 @@ type env struct {
 	logKey  ed25519.PrivateKey
 	issuer  ed25519.PrivateKey
 	witness ed25519.PrivateKey
+	second  ed25519.PrivateKey // a second witness, made by witness2
 }
 
 func newEnv(t testing.TB) *env {
